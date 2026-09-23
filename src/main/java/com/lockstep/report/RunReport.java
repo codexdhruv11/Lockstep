@@ -24,13 +24,26 @@ public record RunReport(
         double percentilePrecision,
         List<RunnerReport> runners,
         List<SpikeReport> spikes,
-        CapacityReport capacity) {
+        CapacityReport capacity,
+        List<StepReport> steps) {
     public static final int SCHEMA_VERSION = 1;
 
     public RunReport {
         runners = List.copyOf(runners);
         spikes = spikes == null ? List.of() : List.copyOf(spikes);
+        steps = steps == null ? List.of() : List.copyOf(steps);
     }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record StepReport(
+            String label,
+            long count,
+            long errorCount,
+            long meanNanos,
+            long p50Nanos,
+            long p95Nanos,
+            long p99Nanos,
+            long maxNanos) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CapacityReport(
@@ -99,6 +112,20 @@ public record RunReport(
         return from(result, toolVersion, null, null);
     }
 
+    private static List<StepReport> stepReports(RunCoordinator.RunResult result) {
+        if (result.scenarioRunner() == null) {
+            return List.of();
+        }
+        List<StepReport> steps = new ArrayList<>();
+        result.scenarioRunner().stepSeries().forEach((label, series) -> {
+            var summary = series.summarize(label, result.context().durationNanos());
+            steps.add(new StepReport(label, summary.count(), summary.errorCount(),
+                    summary.meanNanos(), summary.p50Nanos(), summary.p95Nanos(),
+                    summary.p99Nanos(), summary.maxNanos()));
+        });
+        return steps;
+    }
+
     public static RunReport from(RunCoordinator.RunResult result, String toolVersion,
             com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation) {
         return from(result, toolVersion, correlation, null);
@@ -121,7 +148,8 @@ public record RunReport(
                 HistogramRecorder.PERCENTILE_PRECISION,
                 runners,
                 spikeReports(correlation),
-                capacityReport(capacity));
+                capacityReport(capacity),
+                stepReports(result));
     }
 
     private static CapacityReport capacityReport(

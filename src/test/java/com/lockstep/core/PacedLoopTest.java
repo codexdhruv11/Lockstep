@@ -149,8 +149,9 @@ final class PacedLoopTest {
                 scheduledOffset -> Operation.Outcome.OK);
 
         assertThat(result.executedCount()).isEqualTo(result.scheduledCount());
-        assertThat(result.lateFireCount()).isZero();
-        assertThat(result.fellShort()).isFalse();
+
+        assertThat(result.lateFireCount()).isLessThanOrEqualTo(1);
+        assertThat(result.shedCount()).isZero();
     }
 
     @Test

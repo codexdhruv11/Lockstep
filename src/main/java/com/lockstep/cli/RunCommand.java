@@ -8,6 +8,7 @@ import com.lockstep.analysis.SpikeCorrelator;
 import com.lockstep.core.RunCoordinator;
 import com.lockstep.core.RunProgress;
 import com.lockstep.report.CliTables;
+import com.lockstep.report.HtmlReport;
 import com.lockstep.report.JsonExport;
 import com.lockstep.report.LiveProgress;
 import com.lockstep.report.RunReport;
@@ -53,6 +54,12 @@ public final class RunCommand implements Callable<Integer> {
 
     @Option(names = "--json", description = "Also write the results as JSON, for CI and `compare`.")
     Path jsonPath;
+
+    @Option(names = "--report", description = "Path for the HTML report (default: ${DEFAULT-VALUE}).")
+    Path reportPath = Path.of("report.html");
+
+    @Option(names = "--no-report", description = "Skip writing the HTML report.")
+    boolean noReport;
 
     @Option(names = "--http-threshold", description = "App-side p99 spike threshold (default 100ms).")
     String httpThreshold;
@@ -153,10 +160,16 @@ public final class RunCommand implements Callable<Integer> {
                 out.print(spikes);
             }
         }
+        RunReport report = RunReport.from(result, Version.value(), correlation, capacity);
         if (jsonPath != null) {
-            JsonExport.write(RunReport.from(result, Version.value(), correlation, capacity), jsonPath);
+            JsonExport.write(report, jsonPath);
             out.println();
             out.println("results written to " + jsonPath);
+        }
+        if (!noReport) {
+            HtmlReport.write(report, reportPath);
+            out.println();
+            out.println("report written to " + reportPath);
         }
         out.println();
         out.println(CliTables.precisionNote());

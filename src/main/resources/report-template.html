@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --bg: #ffffff; --ink: #14161a; --mute: #6b7280; --line: #e5e7eb;
+    --accent: #2563eb; --warn: #b45309; --bad: #dc2626; --ok: #15803d;
+    --panel: #f9fafb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --ink: #e6e8eb; --mute: #9aa1ab; --line: #262b33;
+      --accent: #60a5fa; --warn: #fbbf24; --bad: #f87171; --ok: #4ade80;
+      --panel: #161a20;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; margin: 32px 0 10px; text-transform: uppercase;
+       letter-spacing: 0.08em; color: var(--mute); font-weight: 600; }
+  .sub { color: var(--mute); font-size: 13px; margin-bottom: 24px; }
+  .verdict { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+             border-radius: 6px; padding: 14px 16px; margin: 20px 0; }
+  .verdict strong { font-size: 16px; }
+  .verdict .why { color: var(--mute); font-size: 13px; margin-top: 4px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--mute); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td.num, th.num { text-align: right; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px;
+          border: 1px solid var(--line); }
+  .chip.masked { color: var(--warn); border-color: var(--warn); }
+  .chip.correlated { color: var(--bad); border-color: var(--bad); }
+  .note { color: var(--mute); font-size: 13px; margin-top: 8px; }
+  .warn { color: var(--warn); }
+  .scroll { overflow-x: auto; }
+  canvas { margin-top: 8px; }
+  footer { margin-top: 48px; color: var(--mute); font-size: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+  code { background: var(--panel); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>lockstep run</h1>
+  <div class="sub" id="subtitle"></div>
+  <div id="verdict"></div>
+
+  <h2>Runners</h2>
+  <div class="scroll"><table id="runners"></table></div>
+  <div class="note" id="shortfall"></div>
+
+  <h2>Latency over time</h2>
+  <canvas id="timeline" height="120"></canvas>
+  <div class="note" id="chart-note"></div>
+
+  <h2 id="steps-heading" hidden>Steps</h2>
+  <div class="scroll"><table id="steps" hidden></table></div>
+
+  <h2 id="spikes-heading" hidden>Correlated spikes</h2>
+  <div class="scroll"><table id="spikes" hidden></table></div>
+  <div class="note" id="spikes-note"></div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script id="run-data" type="application/json">__DATA__</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  var data = JSON.parse(document.getElementById("run-data").textContent);
+
+  function ns(v) {
+    if (v === null || v === undefined) return "-";
+    if (v < 1000) return v + "ns";
+    if (v < 1e6) return (v / 1e3).toFixed(v / 1e3 >= 100 ? 0 : 1).replace(/\.0$/, "") + "µs";
+    if (v < 1e9) return (v / 1e6).toFixed(v / 1e6 >= 100 ? 0 : 1).replace(/\.0$/, "") + "ms";
+    return (v / 1e9).toFixed(2).replace(/\.00$/, "") + "s";
+  }
+  function clock(v) {
+    var s = Math.max(0, Math.floor(v / 1e9));
+    return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  }
+  function num(v) { return (v === null || v === undefined) ? "-" : v.toLocaleString("en-US"); }
+  function pct(v) { return (v * 100).toFixed(1) + "%"; }
+  function el(tag, text, cls) {
+    var e = document.createElement(tag);
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    if (cls) e.className = cls;
+    return e;
+  }
+  function rows(table, headers, aligns, data) {
+    var head = document.createElement("tr");
+    headers.forEach(function (h, i) {
+      var th = el("th", h, aligns[i] === "r" ? "num" : null);
+      head.appendChild(th);
+    });
+    table.appendChild(head);
+    data.forEach(function (cells) {
+      var tr = document.createElement("tr");
+      cells.forEach(function (c, i) {
+        var td = typeof c === "object" && c !== null && c.node ? c.node : el("td", c);
+        if (td.tagName !== "TD") { var wrap = el("td"); wrap.appendChild(td); td = wrap; }
+        if (aligns[i] === "r") td.className = "num";
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
+  }
+
+  document.getElementById("subtitle").textContent =
+    "started " + data.startedAt + " · duration " + ns(data.durationNanos) +
+    " · bucket " + ns(data.bucketWidthNanos) + " · ramp " + ns(data.rampNanos) +
+    " · concurrency " + data.concurrency + " · " + data.toolVersion;
+
+  // --- verdict -------------------------------------------------------------
+  var spikes = data.spikes || [];
+  var correlated = spikes.filter(function (s) { return !s.masked; });
+  var masked = spikes.filter(function (s) { return s.masked; });
+  var verdict = document.getElementById("verdict");
+  var headline, why;
+  if (!spikes.length) {
+    headline = "No storage spikes.";
+    why = "No database or cache bucket crossed its threshold during this run.";
+  } else if (correlated.length) {
+    var counts = {};
+    correlated.forEach(function (s) { counts[s.verdict] = (counts[s.verdict] || 0) + 1; });
+    var lead = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
+    headline = correlated.length + " correlated spike" + (correlated.length === 1 ? "" : "s") +
+      " — mostly " + lead;
+    why = "The application and a storage layer were both slow in the same window. " +
+      "The verdict names whichever side was slower in each bucket.";
+  } else {
+    headline = masked.length + " masked spike" + (masked.length === 1 ? "" : "s");
+    why = "Storage crossed its threshold while the application stayed under its own — " +
+      "the store is straining but users have not felt it yet.";
+  }
+  var box = el("div", null, "verdict");
+  box.appendChild(el("strong", headline));
+  box.appendChild(el("div", why, "why"));
+  if (data.capacity && data.capacity.usable) {
+    var cap = data.capacity.strained
+      ? "Strain starts around ~" + data.capacity.strainUsers + " users (p99 crossed " +
+        ns(data.capacity.strainLevelNanos) + " against a " + ns(data.capacity.baselineP99Nanos) + " baseline)."
+      : "No strain up to ~" + data.capacity.usersAtEnd + " users.";
+    box.appendChild(el("div", cap + " Re-test at concurrency " + data.capacity.suggestedNextConcurrency +
+      ". Users are estimated from concurrency, not measured.", "why"));
+  }
+  verdict.appendChild(box);
+
+  // --- runners -------------------------------------------------------------
+  rows(document.getElementById("runners"),
+    ["Runner", "Requests", "Success", "Rate", "Mean", "p50", "p95", "p99", "Max", "Status"],
+    ["l", "r", "r", "r", "r", "r", "r", "r", "r", "l"],
+    (data.runners || []).map(function (r) {
+      var statuses = Object.keys(r.statusCounts || {}).map(function (code) {
+        return code + "×" + num(r.statusCounts[code]);
+      }).join(" ") || "-";
+      return [r.name, num(r.count), pct(r.count ? r.successCount / r.count : 0),
+        (r.achievedRatePerSecond || 0).toFixed(1) + "/s", ns(r.meanNanos), ns(r.p50Nanos),
+        ns(r.p95Nanos), ns(r.p99Nanos), ns(r.maxNanos), statuses];
+    }));
+
+  var short = (data.runners || []).filter(function (r) {
+    return r.shedCount > 0 || r.lateFireCount > 0 || r.drainedCleanly === false;
+  }).map(function (r) {
+    var parts = [];
+    if (r.shedCount > 0) parts.push(num(r.shedCount) + " shed (every worker was busy)");
+    if (r.lateFireCount > 0) parts.push(num(r.lateFireCount) + " fired late, worst " + ns(r.maxLatenessNanos));
+    if (r.drainedCleanly === false) parts.push("queued work abandoned at the deadline");
+    return r.name + ": " + num(r.count) + " of " + num(r.scheduledCount) + " scheduled — " + parts.join("; ");
+  });
+  if (short.length) {
+    var sh = document.getElementById("shortfall");
+    sh.className = "note warn";
+    sh.textContent = "This run did not deliver everything it was asked to. " + short.join(" · ");
+  }
+
+  // --- steps ---------------------------------------------------------------
+  if ((data.steps || []).length) {
+    document.getElementById("steps-heading").hidden = false;
+    var stepsTable = document.getElementById("steps");
+    stepsTable.hidden = false;
+    rows(stepsTable, ["Step", "Calls", "Errors", "Mean", "p50", "p95", "p99", "Max"],
+      ["l", "r", "r", "r", "r", "r", "r", "r"],
+      data.steps.map(function (s) {
+        return [s.label, num(s.count), num(s.errorCount), ns(s.meanNanos), ns(s.p50Nanos),
+          ns(s.p95Nanos), ns(s.p99Nanos), ns(s.maxNanos)];
+      }));
+  }
+
+  // --- spikes --------------------------------------------------------------
+  if (spikes.length) {
+    document.getElementById("spikes-heading").hidden = false;
+    var spikesTable = document.getElementById("spikes");
+    spikesTable.hidden = false;
+    rows(spikesTable, ["Time", "Runner", "App p99", "Storage p99", "Finding"],
+      ["l", "l", "r", "r", "l"],
+      spikes.map(function (s) {
+        var chip = el("span", s.masked ? s.storageRunner + "-only" : "correlated → " + s.verdict,
+          "chip " + (s.masked ? "masked" : "correlated"));
+        return [clock(s.startOffsetNanos), s.storageRunner, ns(s.appP99Nanos),
+          ns(s.storageP99Nanos), { node: chip }];
+      }));
+    document.getElementById("spikes-note").textContent =
+      "Masked means the store crossed its threshold while the application did not. " +
+      "Buckets where only the application was slow are deliberately not listed — " +
+      "that is an application problem, not a storage one.";
+  }
+
+  // --- chart ---------------------------------------------------------------
+  var palette = ["#2563eb", "#dc2626", "#15803d", "#b45309", "#7c3aed"];
+  var buckets = {};
+  (data.runners || []).forEach(function (r) {
+    (r.buckets || []).forEach(function (b) { if (b.count > 0) buckets[b.index] = b.startOffsetNanos; });
+  });
+  var indices = Object.keys(buckets).map(Number).sort(function (a, b) { return a - b; });
+  var labels = indices.map(function (i) { return clock(buckets[i]); });
+
+  var datasets = (data.runners || []).map(function (r, i) {
+    var byIndex = {};
+    (r.buckets || []).forEach(function (b) { if (b.count > 0) byIndex[b.index] = b.p99Nanos / 1e6; });
+    return {
+      label: r.name + " p99",
+      data: indices.map(function (idx) { return byIndex[idx] === undefined ? null : byIndex[idx]; }),
+      borderColor: palette[i % palette.length],
+      backgroundColor: palette[i % palette.length],
+      borderWidth: 2, pointRadius: 0, tension: 0.25, spanGaps: true, yAxisID: "y"
+    };
+  });
+
+  // Estimated active users on a second axis: linear through the ramp, flat after.
+  var rampSeconds = data.rampNanos / 1e9;
+  var usersAt = function (offsetNanos) {
+    if (!data.concurrency) return null;
+    if (rampSeconds <= 0) return data.concurrency;
+    var elapsed = (offsetNanos + data.bucketWidthNanos) / 1e9;
+    return Math.max(1, Math.round(data.concurrency * Math.min(1, elapsed / rampSeconds)));
+  };
+  datasets.push({
+    label: "active users (estimated)",
+    data: indices.map(function (idx) { return usersAt(buckets[idx]); }),
+    borderColor: "#9aa1ab", borderDash: [4, 4], borderWidth: 1.5,
+    pointRadius: 0, tension: 0, yAxisID: "users"
+  });
+
+  var rampBucketCount = rampSeconds > 0
+    ? indices.filter(function (idx) { return buckets[idx] < data.rampNanos; }).length : 0;
+
+  var rampShade = {
+    id: "rampShade",
+    beforeDatasetsDraw: function (chart) {
+      if (!rampBucketCount) return;
+      var area = chart.chartArea, x = chart.scales.x;
+      if (!area || !x) return;
+      var right = x.getPixelForValue(Math.min(rampBucketCount, indices.length - 1));
+      chart.ctx.save();
+      chart.ctx.fillStyle = "rgba(148,163,184,0.12)";
+      chart.ctx.fillRect(area.left, area.top, right - area.left, area.bottom - area.top);
+      chart.ctx.fillStyle = "#9aa1ab";
+      chart.ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+      chart.ctx.fillText("ramp", area.left + 6, area.top + 14);
+      chart.ctx.restore();
+    }
+  };
+
+  new Chart(document.getElementById("timeline"), {
+    type: "line",
+    data: { labels: labels, datasets: datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { grid: { display: false }, ticks: { maxTicksLimit: 12 } },
+        y: { title: { display: true, text: "p99 (ms)" }, beginAtZero: true },
+        users: { position: "right", title: { display: true, text: "users (est.)" },
+                 beginAtZero: true, grid: { display: false } }
+      },
+      plugins: { legend: { labels: { boxWidth: 12 } } }
+    },
+    plugins: [rampShade]
+  });
+
+  document.getElementById("chart-note").textContent =
+    "p99 per bucket, per runner. The shaded window is the ramp. Active users are estimated " +
+    "from concurrency, not measured.";
+
+  document.getElementById("footer").textContent =
+    "Percentiles are accurate to ~" + (data.percentilePrecision * 100).toFixed(1) +
+    "% (histogram precision). Generated by lockstep " + data.toolVersion +
+    ". All run data is embedded in this file; only the chart library is loaded from a CDN.";
+})();
+</script>
+</body>
+</html>
