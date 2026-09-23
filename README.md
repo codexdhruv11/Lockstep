@@ -4,7 +4,9 @@ A Java 21 reimplementation of [reference]((the reference implementation)) — a 
 testing tool that drives HTTP, database and Redis load on one clock, buckets every layer's
 latencies onto the same timeline, and reports **which layer** caused a slowdown.
 
-Backend + CLI only. No web UI.
+Backend + CLI only. No web UI. Plain Java 21 — no frameworks, and no external load-generator
+binary: HTTP, DB and Redis load are all driven from the same in-process pacer so their latencies
+share one clock.
 
 ## Who does what
 
@@ -39,7 +41,6 @@ for the parts that are wrong and must be done differently.
 
 - Java 21 (installed: 21.0.10)
 - Maven 3.6+ (installed: 3.6.3)
-- `vegeta` binary on PATH — needed from Phase 6 onward
 - Docker — needed for Testcontainers tests (Postgres, Redis)
 
 ## Build
