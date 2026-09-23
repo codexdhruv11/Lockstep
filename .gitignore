@@ -1,0 +1,8 @@
+target/
+*.class
+report.html
+compare.html
+results*.json
+.idea/
+*.iml
+.vscode/
