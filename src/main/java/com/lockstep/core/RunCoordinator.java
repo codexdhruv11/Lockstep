@@ -4,6 +4,7 @@ import com.lockstep.config.Config;
 import com.lockstep.runner.db.DbRunner;
 import com.lockstep.runner.http.HttpRunner;
 import com.lockstep.runner.redis.RedisRunner;
+import com.lockstep.scenario.ScenarioRunner;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,6 +39,9 @@ public final class RunCoordinator {
             if (config.http() != null) {
                 runners.add(HttpRunner.create(config.http(), concurrency));
             }
+            if (!config.scenario().isEmpty()) {
+                runners.add(ScenarioRunner.create(config.scenario(), scenarioRate(config)));
+            }
             if (config.db() != null) {
                 runners.add(DbRunner.create(config.db(), concurrency));
             }
@@ -49,6 +53,10 @@ public final class RunCoordinator {
             closeAll(runners);
             throw e;
         }
+    }
+
+    private static int scenarioRate(Config config) {
+        return Math.max(1, config.concurrency());
     }
 
     private static Map<String, PacedLoop.LoopResult> runAll(
@@ -80,6 +88,9 @@ public final class RunCoordinator {
         }
         if (runner instanceof RedisRunner redis) {
             return redis.run(context, counter);
+        }
+        if (runner instanceof ScenarioRunner scenario) {
+            return scenario.run(context, counter);
         }
         return runner.run(context);
     }

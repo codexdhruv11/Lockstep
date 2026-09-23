@@ -122,10 +122,14 @@ public final class RunCommand implements Callable<Integer> {
 
         SpikeCorrelator.CorrelationResult correlation =
                 SpikeCorrelator.correlate(result, thresholds());
-        String spikes = CliTables.spikeTable(correlation);
-        if (!spikes.isEmpty()) {
-            out.println();
-            out.print(spikes);
+
+        boolean hasStorage = result.byRunner().containsKey("db") || result.byRunner().containsKey("redis");
+        if (hasStorage) {
+            String spikes = CliTables.spikeTable(correlation);
+            if (!spikes.isEmpty()) {
+                out.println();
+                out.print(spikes);
+            }
         }
         if (jsonPath != null) {
             JsonExport.write(RunReport.from(result, Version.value(), correlation, capacity), jsonPath);
