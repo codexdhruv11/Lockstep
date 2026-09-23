@@ -144,6 +144,23 @@ final class PacedLoopTest {
     }
 
     @Test
+    void routineSchedulerOvershootIsNotReportedAsFallingShort() {
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 20), 50,
+                () -> Operation.Outcome.OK);
+
+        assertThat(result.executedCount()).isEqualTo(result.scheduledCount());
+        assertThat(result.lateFireCount()).isZero();
+        assertThat(result.fellShort()).isFalse();
+    }
+
+    @Test
+    void latenessToleranceScalesWithTheArrivalInterval() {
+        assertThat(PacedLoop.latenessToleranceNanos(50)).isEqualTo(2 * MS);
+        assertThat(PacedLoop.latenessToleranceNanos(5000)).isEqualTo(MS);
+        assertThat(PacedLoop.latenessToleranceNanos(1)).isEqualTo(100 * MS);
+    }
+
+    @Test
     void expectedHitsIsReportedSoShortfallIsVisible() {
         PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 1), 200, () -> {
             Thread.sleep(50);

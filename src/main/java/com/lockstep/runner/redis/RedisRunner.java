@@ -5,6 +5,8 @@ import com.lockstep.config.RedisConfig;
 import com.lockstep.core.Operation;
 import com.lockstep.core.PacedLoop;
 import com.lockstep.core.RunContext;
+import com.lockstep.core.RunProgress;
+import com.lockstep.core.Runner;
 import com.lockstep.runner.QueryPicker;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
@@ -18,7 +20,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
-public final class RedisRunner implements AutoCloseable {
+public final class RedisRunner implements Runner {
     private static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(10);
 
     private final RedisClient client;
@@ -66,8 +68,18 @@ public final class RedisRunner implements AutoCloseable {
         }
     }
 
+    @Override
     public PacedLoop.LoopResult run(RunContext context) {
-        return PacedLoop.run(context, rate, this::executeOne);
+        return run(context, null);
+    }
+
+    public PacedLoop.LoopResult run(RunContext context, RunProgress.Counter progress) {
+        return PacedLoop.run(context, rate, this::executeOne, progress);
+    }
+
+    @Override
+    public String name() {
+        return "redis";
     }
 
     private Operation.Outcome executeOne() {

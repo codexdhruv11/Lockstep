@@ -17,9 +17,16 @@ public final class PacedLoop {
 
     private static final long DRAIN_TIMEOUT_SECONDS = 30;
 
+    private static final long MIN_LATENESS_TOLERANCE_NANOS = 1_000_000L;
+
     private PacedLoop() {}
 
     public static LoopResult run(RunContext context, int ratePerSecond, Operation operation) {
+        return run(context, ratePerSecond, operation, null);
+    }
+
+    public static LoopResult run(RunContext context, int ratePerSecond, Operation operation,
+            RunProgress.Counter progress) {
         Pacer pacer = new Pacer(ratePerSecond, context.rampNanos());
         int buckets = HistogramRecorder.bucketsFor(context.durationNanos(), context.bucketWidthNanos());
         HistogramRecorder recorder = new HistogramRecorder(context.bucketWidthNanos(), buckets);
@@ -31,10 +38,11 @@ public final class PacedLoop {
         LongAdder lateFires = new LongAdder();
         AtomicLong maxLatenessNanos = new AtomicLong();
         long scheduledCount = 0;
+        long latenessTolerance = latenessToleranceNanos(ratePerSecond);
 
         try (ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor()) {
             for (int i = 0; i < workerCount; i++) {
-                workers.submit(() -> drain(queue, accepting, recorder, operation, context));
+                workers.submit(() -> drain(queue, accepting, recorder, operation, context, progress));
             }
 
             for (long hit = 1; ; hit++) {
@@ -44,7 +52,7 @@ public final class PacedLoop {
                 }
                 scheduledCount++;
                 long lateness = awaitDeadline(context.deadlineFor(scheduledOffset));
-                if (lateness > 0) {
+                if (lateness > latenessTolerance) {
                     lateFires.increment();
                     maxLatenessNanos.accumulateAndGet(lateness, Math::max);
                 }
@@ -74,7 +82,8 @@ public final class PacedLoop {
     }
 
     private static void drain(BlockingQueue<Long> queue, AtomicBoolean accepting,
-            HistogramRecorder recorder, Operation operation, RunContext context) {
+            HistogramRecorder recorder, Operation operation, RunContext context,
+            RunProgress.Counter progress) {
         while (true) {
             Long scheduledOffset;
             try {
@@ -89,12 +98,12 @@ public final class PacedLoop {
                 }
                 continue;
             }
-            execute(recorder, operation, context, scheduledOffset);
+            execute(recorder, operation, context, scheduledOffset, progress);
         }
     }
 
     private static void execute(HistogramRecorder recorder, Operation operation,
-            RunContext context, long scheduledOffset) {
+            RunContext context, long scheduledOffset, RunProgress.Counter progress) {
         long scheduledNanoTime = context.deadlineFor(scheduledOffset);
         long startedAt = System.nanoTime();
         Operation.Outcome outcome;
@@ -111,6 +120,14 @@ public final class PacedLoop {
                 finishedAt - startedAt,
                 outcome.success(),
                 outcome.statusCode());
+        if (progress != null) {
+            progress.record(outcome.success());
+        }
+    }
+
+    static long latenessToleranceNanos(int ratePerSecond) {
+        long intervalNanos = 1_000_000_000L / Math.max(1, ratePerSecond);
+        return Math.max(MIN_LATENESS_TOLERANCE_NANOS, intervalNanos / 10);
     }
 
     private static long awaitDeadline(long deadlineNanoTime) {

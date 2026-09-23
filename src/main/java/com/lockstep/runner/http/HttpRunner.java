@@ -4,6 +4,8 @@ import com.lockstep.config.HttpConfig;
 import com.lockstep.core.Operation;
 import com.lockstep.core.PacedLoop;
 import com.lockstep.core.RunContext;
+import com.lockstep.core.RunProgress;
+import com.lockstep.core.Runner;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -13,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
-public final class HttpRunner implements AutoCloseable {
+public final class HttpRunner implements Runner {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
     private final HttpClient client;
@@ -54,8 +56,18 @@ public final class HttpRunner implements AutoCloseable {
         return new HttpRunner(client, builder, config.rate());
     }
 
+    @Override
     public PacedLoop.LoopResult run(RunContext context) {
-        return PacedLoop.run(context, rate, this::executeOne);
+        return run(context, null);
+    }
+
+    public PacedLoop.LoopResult run(RunContext context, RunProgress.Counter progress) {
+        return PacedLoop.run(context, rate, this::executeOne, progress);
+    }
+
+    @Override
+    public String name() {
+        return "http";
     }
 
     private Operation.Outcome executeOne() {

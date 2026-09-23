@@ -6,6 +6,8 @@ import com.lockstep.config.QuerySpec;
 import com.lockstep.core.Operation;
 import com.lockstep.core.PacedLoop;
 import com.lockstep.core.RunContext;
+import com.lockstep.core.RunProgress;
+import com.lockstep.core.Runner;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
@@ -15,7 +17,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
-public final class DbRunner implements AutoCloseable {
+public final class DbRunner implements Runner {
     private static final int QUERY_TIMEOUT_SECONDS = 10;
 
     private final HikariDataSource dataSource;
@@ -53,8 +55,18 @@ public final class DbRunner implements AutoCloseable {
         return new DbRunner(dataSource, new QueryPicker(config.target().queries()), config.rate());
     }
 
+    @Override
     public PacedLoop.LoopResult run(RunContext context) {
-        return PacedLoop.run(context, rate, this::executeOne);
+        return run(context, null);
+    }
+
+    public PacedLoop.LoopResult run(RunContext context, RunProgress.Counter progress) {
+        return PacedLoop.run(context, rate, this::executeOne, progress);
+    }
+
+    @Override
+    public String name() {
+        return "db";
     }
 
     private Operation.Outcome executeOne() {
