@@ -85,6 +85,24 @@ public final class CliTables {
         return "correlated spikes\n" + render(rows);
     }
 
+    public static String capacityLine(com.lockstep.analysis.CapacityFinder.Capacity capacity) {
+        if (!capacity.usable()) {
+            return Ansi.dim("capacity: run too short to say (needs "
+                    + com.lockstep.analysis.CapacityFinder.MINIMUM_BUCKETS + "+ buckets with traffic)\n");
+        }
+        String headline = capacity.strained()
+                ? "capacity: strain starts around ~%d users (at %s, p99 crossed %s against a %s baseline)"
+                        .formatted(capacity.strainUsers(), Numbers.clock(capacity.strainOffsetNanos()),
+                                Numbers.latency(capacity.strainLevelNanos()),
+                                Numbers.latency(capacity.baselineP99Nanos()))
+                : "capacity: no strain up to ~%d users (baseline p99 %s)"
+                        .formatted(capacity.usersAtEnd(), Numbers.latency(capacity.baselineP99Nanos()));
+        String next = "  re-test at concurrency " + capacity.suggestedNextConcurrency();
+        String caveat = Ansi.dim(
+                "  users are estimated from concurrency, not measured — one worker is not one user");
+        return headline + "\n" + next + "\n" + caveat + "\n";
+    }
+
     public static String bucketTable(String runnerName, PacedLoop.LoopResult loop) {
         List<String[]> rows = new ArrayList<>();
         rows.add(new String[] {"BUCKET", "COUNT", "ERR", "P50", "P95", "P99", "MAX", "QUEUE_P99"});

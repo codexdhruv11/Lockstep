@@ -3,6 +3,7 @@ package com.lockstep.cli;
 import com.lockstep.config.Config;
 import com.lockstep.config.ConfigLoader;
 import com.lockstep.config.ConfigValidationException;
+import com.lockstep.analysis.CapacityFinder;
 import com.lockstep.analysis.SpikeCorrelator;
 import com.lockstep.core.RunCoordinator;
 import com.lockstep.core.RunProgress;
@@ -109,6 +110,16 @@ public final class RunCommand implements Callable<Integer> {
                 out.print(CliTables.bucketTable(name, loop));
             });
         }
+        var appLoop = result.byRunner().get("http");
+        CapacityFinder.Capacity capacity = appLoop == null
+                ? CapacityFinder.Capacity.notUsable(result.context().concurrency())
+                : CapacityFinder.find(appLoop.series().buckets(), result.context().concurrency(),
+                        result.context().rampNanos(), result.context().bucketWidthNanos());
+        if (appLoop != null) {
+            out.println();
+            out.print(CliTables.capacityLine(capacity));
+        }
+
         SpikeCorrelator.CorrelationResult correlation =
                 SpikeCorrelator.correlate(result, thresholds());
         String spikes = CliTables.spikeTable(correlation);
@@ -117,7 +128,7 @@ public final class RunCommand implements Callable<Integer> {
             out.print(spikes);
         }
         if (jsonPath != null) {
-            JsonExport.write(RunReport.from(result, Version.value(), correlation), jsonPath);
+            JsonExport.write(RunReport.from(result, Version.value(), correlation, capacity), jsonPath);
             out.println();
             out.println("results written to " + jsonPath);
         }

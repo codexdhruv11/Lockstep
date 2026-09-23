@@ -23,13 +23,26 @@ public record RunReport(
         int concurrency,
         double percentilePrecision,
         List<RunnerReport> runners,
-        List<SpikeReport> spikes) {
+        List<SpikeReport> spikes,
+        CapacityReport capacity) {
     public static final int SCHEMA_VERSION = 1;
 
     public RunReport {
         runners = List.copyOf(runners);
         spikes = spikes == null ? List.of() : List.copyOf(spikes);
     }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record CapacityReport(
+            boolean usable,
+            boolean strained,
+            int strainBucketIndex,
+            long strainOffsetNanos,
+            int strainUsers,
+            int usersAtEnd,
+            long baselineP99Nanos,
+            long strainLevelNanos,
+            int suggestedNextConcurrency) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record SpikeReport(
@@ -83,11 +96,17 @@ public record RunReport(
             long serviceP99Nanos) {}
 
     public static RunReport from(RunCoordinator.RunResult result, String toolVersion) {
-        return from(result, toolVersion, null);
+        return from(result, toolVersion, null, null);
     }
 
     public static RunReport from(RunCoordinator.RunResult result, String toolVersion,
             com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation) {
+        return from(result, toolVersion, correlation, null);
+    }
+
+    public static RunReport from(RunCoordinator.RunResult result, String toolVersion,
+            com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation,
+            com.lockstep.analysis.CapacityFinder.Capacity capacity) {
         List<RunnerReport> runners = new ArrayList<>();
         result.byRunner().forEach((name, loop) -> runners.add(runnerReport(name, loop, result)));
         return new RunReport(
@@ -101,7 +120,19 @@ public record RunReport(
                 result.context().concurrency(),
                 HistogramRecorder.PERCENTILE_PRECISION,
                 runners,
-                spikeReports(correlation));
+                spikeReports(correlation),
+                capacityReport(capacity));
+    }
+
+    private static CapacityReport capacityReport(
+            com.lockstep.analysis.CapacityFinder.Capacity capacity) {
+        if (capacity == null) {
+            return null;
+        }
+        return new CapacityReport(capacity.usable(), capacity.strained(),
+                capacity.strainBucketIndex(), capacity.strainOffsetNanos(), capacity.strainUsers(),
+                capacity.usersAtEnd(), capacity.baselineP99Nanos(), capacity.strainLevelNanos(),
+                capacity.suggestedNextConcurrency());
     }
 
     private static List<SpikeReport> spikeReports(
