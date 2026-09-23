@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lockstep comparison</title>
+<style>
+  :root { --bg:#fff; --ink:#14161a; --mute:#6b7280; --line:#e5e7eb; --bad:#dc2626; --ok:#15803d;
+          --warn:#b45309; --panel:#f9fafb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --ink:#e6e8eb; --mute:#9aa1ab; --line:#262b33; --bad:#f87171;
+            --ok:#4ade80; --warn:#fbbf24; --panel:#161a20; }
+  }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width:900px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--mute);
+       margin:28px 0 8px; }
+  .sub { color:var(--mute); font-size:13px; margin-bottom:20px; }
+  .verdict { border:1px solid var(--line); border-left:3px solid var(--ok); background:var(--panel);
+             border-radius:6px; padding:14px 16px; margin-bottom:20px; }
+  .verdict.failed { border-left-color:var(--bad); }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; font-size:14px; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--mute); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  td.num, th.num { text-align:right; }
+  .REGRESSION { color:var(--bad); font-weight:600; }
+  .IMPROVED { color:var(--ok); }
+  .NEW, .REMOVED { color:var(--mute); }
+  .note { color:var(--mute); font-size:13px; margin-top:8px; }
+  .warn { color:var(--warn); }
+  footer { margin-top:40px; border-top:1px solid var(--line); padding-top:12px;
+           color:var(--mute); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>lockstep comparison</h1>
+  <div class="sub" id="subtitle"></div>
+  <div id="verdict"></div>
+  <h2>Runners</h2>
+  <table id="runners"></table>
+  <div class="note warn" id="warnings"></div>
+  <h2 id="spikes-heading" hidden>Spikes, paired by position</h2>
+  <table id="spikes" hidden></table>
+  <div class="note" id="spikes-note" hidden></div>
+  <footer id="footer"></footer>
+</div>
+<script id="compare-data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  var d = JSON.parse(document.getElementById("compare-data").textContent);
+  function ns(v) {
+    if (v === null || v === undefined) return "-";
+    if (v < 1e3) return v + "ns";
+    if (v < 1e6) return (v/1e3).toFixed(1).replace(/\.0$/,"") + "\u00b5s";
+    if (v < 1e9) return (v/1e6).toFixed(1).replace(/\.0$/,"") + "ms";
+    return (v/1e9).toFixed(2).replace(/\.00$/,"") + "s";
+  }
+  function el(t, x, c) { var e=document.createElement(t); if(x!==undefined&&x!==null) e.textContent=String(x); if(c) e.className=c; return e; }
+
+  document.getElementById("subtitle").textContent =
+    d.baselineLabel + " \u2192 " + d.currentLabel + " \u00b7 budget " + ns(d.budgetNanos);
+
+  var regressions = d.runners.filter(function (r) { return r.verdict === "REGRESSION"; });
+  var v = el("div", null, "verdict" + (regressions.length ? " failed" : ""));
+  v.appendChild(el("strong", regressions.length
+    ? regressions.length + " runner" + (regressions.length===1?"":"s") + " regressed past the budget"
+    : "No runner regressed past the budget"));
+  v.appendChild(el("div", regressions.length
+    ? regressions.map(function (r) { return r.name + " " + ns(r.baselineP99Nanos) + " \u2192 " + ns(r.currentP99Nanos); }).join(" \u00b7 ")
+    : "p99 growth stayed within " + ns(d.budgetNanos) + " for every runner present in both runs.", "note"));
+  document.getElementById("verdict").appendChild(v);
+
+  var table = document.getElementById("runners");
+  var head = document.createElement("tr");
+  ["Runner","Baseline p99","Current p99","Change","Verdict","Correlated spikes"].forEach(function (h, i) {
+    head.appendChild(el("th", h, i >= 1 && i <= 3 ? "num" : null));
+  });
+  table.appendChild(head);
+  d.runners.forEach(function (r) {
+    var tr = document.createElement("tr");
+    tr.appendChild(el("td", r.name));
+    tr.appendChild(el("td", r.verdict === "NEW" ? "-" : ns(r.baselineP99Nanos), "num"));
+    tr.appendChild(el("td", r.verdict === "REMOVED" ? "-" : ns(r.currentP99Nanos), "num"));
+    tr.appendChild(el("td", (r.verdict==="NEW"||r.verdict==="REMOVED") ? "-"
+      : (r.changeFraction >= 0 ? "+" : "") + (r.changeFraction*100).toFixed(0) + "%", "num"));
+    tr.appendChild(el("td", r.verdict, r.verdict));
+    tr.appendChild(el("td", r.baselineCorrelated + " \u2192 " + r.currentCorrelated,
+      r.currentCorrelated > r.baselineCorrelated ? "REGRESSION" : null));
+    table.appendChild(tr);
+  });
+
+  if ((d.warnings || []).length) {
+    document.getElementById("warnings").textContent =
+      "These runs are not directly comparable: " + d.warnings.join("; ");
+  }
+
+  if ((d.spikePairs || []).length) {
+    document.getElementById("spikes-heading").hidden = false;
+    var st = document.getElementById("spikes");
+    st.hidden = false;
+    var sh = document.createElement("tr");
+    ["Runner","#","Baseline p99","Current p99","Was","Now"].forEach(function (h, i) {
+      sh.appendChild(el("th", h, i===2||i===3 ? "num" : null));
+    });
+    st.appendChild(sh);
+    d.spikePairs.forEach(function (p) {
+      var tr = document.createElement("tr");
+      tr.appendChild(el("td", p.runner));
+      tr.appendChild(el("td", p.ordinal + 1));
+      tr.appendChild(el("td", ns(p.baselineStorageP99Nanos), "num"));
+      tr.appendChild(el("td", ns(p.currentStorageP99Nanos), "num"));
+      tr.appendChild(el("td", p.baselineMasked === null ? "-" : (p.baselineMasked ? "masked" : "correlated")));
+      tr.appendChild(el("td", p.currentMasked === null ? "-" : (p.currentMasked ? "masked" : "correlated"),
+        (p.baselineMasked === true && p.currentMasked === false) ? "REGRESSION" : null));
+      st.appendChild(tr);
+    });
+    var note = document.getElementById("spikes-note");
+    note.hidden = false;
+    note.textContent = "Spikes are paired by position within each runner, never by time: " +
+      "two runs never share a clock, so a spike at 00:07 in one is not the same event as a spike " +
+      "at 00:07 in the other.";
+  }
+
+  document.getElementById("footer").textContent =
+    "A runner regresses when its p99 grows by more than the budget. Changes smaller than the " +
+    "recorded measurement precision are reported as unchanged. Generated by lockstep.";
+})();
+</script>
+</body>
+</html>
