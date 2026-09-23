@@ -6,7 +6,9 @@ import com.lockstep.config.ConfigValidationException;
 import com.lockstep.core.RunCoordinator;
 import com.lockstep.core.RunProgress;
 import com.lockstep.report.CliTables;
+import com.lockstep.report.JsonExport;
 import com.lockstep.report.LiveProgress;
+import com.lockstep.report.RunReport;
 import com.lockstep.util.Ansi;
 import com.lockstep.util.Durations;
 import java.io.PrintWriter;
@@ -44,6 +46,9 @@ public final class RunCommand implements Callable<Integer> {
 
     @Option(names = "--no-progress", description = "Suppress the live progress line on stderr.")
     boolean noProgress;
+
+    @Option(names = "--json", description = "Also write the results as JSON, for CI and `compare`.")
+    Path jsonPath;
 
     @Override
     public Integer call() {
@@ -93,6 +98,11 @@ public final class RunCommand implements Callable<Integer> {
                 out.println();
                 out.print(CliTables.bucketTable(name, loop));
             });
+        }
+        if (jsonPath != null) {
+            JsonExport.write(RunReport.from(result, Version.value()), jsonPath);
+            out.println();
+            out.println("results written to " + jsonPath);
         }
         out.println();
         out.println(CliTables.precisionNote());
