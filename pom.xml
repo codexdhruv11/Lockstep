@@ -125,6 +125,12 @@
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <!-- Maven 3.6.3's default (3.1) ignores maven.compiler.release and cannot emit Java 21. -->
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.2</version>
       </plugin>
@@ -140,6 +146,10 @@
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>com.lockstep.cli.Cli</mainClass>
+                  <manifestEntries>
+                    <!-- Version.value() reads this; one source for both version outputs. -->
+                    <Implementation-Version>${project.version}</Implementation-Version>
+                  </manifestEntries>
                 </transformer>
               </transformers>
               <createDependencyReducedPom>false</createDependencyReducedPom>
