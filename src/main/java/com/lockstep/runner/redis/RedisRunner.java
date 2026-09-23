@@ -74,7 +74,7 @@ public final class RedisRunner implements Runner {
     }
 
     public PacedLoop.LoopResult run(RunContext context, RunProgress.Counter progress) {
-        return PacedLoop.run(context, rate, this::executeOne, progress);
+        return PacedLoop.run(context, rate, scheduledOffset -> executeOne(), progress);
     }
 
     @Override

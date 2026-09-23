@@ -121,6 +121,29 @@ public final class CliTables {
         return runnerName + "\n" + render(rows);
     }
 
+    public static String stepTable(java.util.Map<String, com.lockstep.stats.BucketSeries> steps,
+            long runDurationNanos) {
+        if (steps.isEmpty()) {
+            return "";
+        }
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"STEP", "CALLS", "ERR", "MEAN", "P50", "P95", "P99", "MAX"});
+        steps.forEach((label, series) -> {
+            var summary = series.summarize(label, runDurationNanos);
+            rows.add(new String[] {
+                label,
+                Numbers.withSeparators(summary.count()),
+                Numbers.withSeparators(summary.errorCount()),
+                Numbers.latency(summary.meanNanos()),
+                Numbers.latency(summary.p50Nanos()),
+                Numbers.latency(summary.p95Nanos()),
+                Numbers.latency(summary.p99Nanos()),
+                Numbers.latency(summary.maxNanos()),
+            });
+        });
+        return "steps\n" + render(rows);
+    }
+
     public static String runHeader(RunCoordinator.RunResult result) {
         var context = result.context();
         return "duration %s · bucket %s · concurrency %d · ramp %s".formatted(

@@ -178,7 +178,7 @@ final class SpikeCorrelatorTest {
         Map<String, PacedLoop.LoopResult> runners = new LinkedHashMap<>();
         runners.put("db", new PacedLoop.LoopResult(recorder.snapshot(), 1, 0, 0, 0, 1, true));
         var result = new RunCoordinator.RunResult(
-                new RunContext(0, Instant.EPOCH, 2 * SECOND, SECOND, 0, 4), runners);
+                new RunContext(0, Instant.EPOCH, 2 * SECOND, SECOND, 0, 4), runners, null);
 
         CorrelationResult correlation = SpikeCorrelator.correlate(result, Thresholds.defaults());
 
@@ -205,7 +205,7 @@ final class SpikeCorrelatorTest {
         runners.put("http", new PacedLoop.LoopResult(httpSeries, 200, 0, 0, 0, 200, true));
         runners.put("db", new PacedLoop.LoopResult(dbSeries, 200, 0, 0, 0, 200, true));
         var result = new RunCoordinator.RunResult(
-                new RunContext(0, Instant.EPOCH, 4 * SECOND, SECOND, 0, 8), runners);
+                new RunContext(0, Instant.EPOCH, 4 * SECOND, SECOND, 0, 8), runners, null);
 
         CorrelationResult correlation = SpikeCorrelator.correlate(result, Thresholds.defaults());
 

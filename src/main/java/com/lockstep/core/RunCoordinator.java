@@ -16,7 +16,8 @@ import java.util.concurrent.Future;
 public final class RunCoordinator {
     private RunCoordinator() {}
 
-    public record RunResult(RunContext context, Map<String, PacedLoop.LoopResult> byRunner) {
+    public record RunResult(RunContext context, Map<String, PacedLoop.LoopResult> byRunner,
+            ScenarioRunner scenarioRunner) {
         public RunResult {
             byRunner = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(byRunner));
         }
@@ -27,7 +28,12 @@ public final class RunCoordinator {
                 config.duration(), config.bucketWidth(), config.ramp(), config.concurrency());
         List<Runner> runners = build(config, context.concurrency());
         try {
-            return new RunResult(context, runAll(runners, context, progress));
+            Map<String, PacedLoop.LoopResult> results = runAll(runners, context, progress);
+            ScenarioRunner scenario = runners.stream()
+                    .filter(ScenarioRunner.class::isInstance)
+                    .map(ScenarioRunner.class::cast)
+                    .findFirst().orElse(null);
+            return new RunResult(context, results, scenario);
         } finally {
             closeAll(runners);
         }

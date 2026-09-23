@@ -16,6 +16,8 @@ import com.lockstep.util.Durations;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
@@ -110,20 +112,40 @@ public final class RunCommand implements Callable<Integer> {
                 out.print(CliTables.bucketTable(name, loop));
             });
         }
+
         var appLoop = result.byRunner().get("http");
-        CapacityFinder.Capacity capacity = appLoop == null
+        List<com.lockstep.stats.Bucket> appTimeline = appLoop != null
+                ? appLoop.series().buckets()
+                : (result.scenarioRunner() == null ? List.of() : result.scenarioRunner().appTimeline());
+
+        if (result.scenarioRunner() != null) {
+            String steps = CliTables.stepTable(result.scenarioRunner().stepSeries(),
+                    result.context().durationNanos());
+            if (!steps.isEmpty()) {
+                out.println();
+                out.print(steps);
+            }
+        }
+
+        CapacityFinder.Capacity capacity = appTimeline.isEmpty()
                 ? CapacityFinder.Capacity.notUsable(result.context().concurrency())
-                : CapacityFinder.find(appLoop.series().buckets(), result.context().concurrency(),
+                : CapacityFinder.find(appTimeline, result.context().concurrency(),
                         result.context().rampNanos(), result.context().bucketWidthNanos());
-        if (appLoop != null) {
+        if (!appTimeline.isEmpty()) {
             out.println();
             out.print(CliTables.capacityLine(capacity));
         }
 
+        Map<String, List<com.lockstep.stats.Bucket>> storageTimelines = new java.util.LinkedHashMap<>();
+        result.byRunner().forEach((name, loop) -> {
+            if ("db".equals(name) || "redis".equals(name)) {
+                storageTimelines.put(name, loop.series().buckets());
+            }
+        });
         SpikeCorrelator.CorrelationResult correlation =
-                SpikeCorrelator.correlate(result, thresholds());
+                SpikeCorrelator.correlate(appTimeline, storageTimelines, thresholds());
 
-        boolean hasStorage = result.byRunner().containsKey("db") || result.byRunner().containsKey("redis");
+        boolean hasStorage = !storageTimelines.isEmpty();
         if (hasStorage) {
             String spikes = CliTables.spikeTable(correlation);
             if (!spikes.isEmpty()) {

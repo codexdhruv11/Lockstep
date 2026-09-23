@@ -2,7 +2,7 @@ package com.lockstep.core;
 
 @FunctionalInterface
 public interface Operation {
-    Outcome execute() throws Exception;
+    Outcome execute(long scheduledOffsetNanos) throws Exception;
 
     record Outcome(boolean success, Integer statusCode, String failure) {
         public static final Outcome OK = new Outcome(true, null, null);

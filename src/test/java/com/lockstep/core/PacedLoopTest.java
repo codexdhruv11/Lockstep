@@ -18,7 +18,7 @@ final class PacedLoopTest {
     @Test
     void firesRoughlyTheConfiguredNumberOfOperations() {
         LongAdder executed = new LongAdder();
-        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 20), 100, () -> {
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 20), 100, scheduledOffset -> {
             executed.increment();
             return Operation.Outcome.OK;
         });
@@ -31,7 +31,7 @@ final class PacedLoopTest {
 
     @Test
     void aSlowTargetDoesNotSlowTheArrivalRate() {
-        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 200), 100, () -> {
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 200), 100, scheduledOffset -> {
             Thread.sleep(200);
             return Operation.Outcome.OK;
         });
@@ -44,7 +44,7 @@ final class PacedLoopTest {
 
     @Test
     void saturationIsShedAndCountedRatherThanQueuedOrIgnored() {
-        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 2), 50, () -> {
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 2), 50, scheduledOffset -> {
             Thread.sleep(200);
             return Operation.Outcome.OK;
         });
@@ -57,7 +57,7 @@ final class PacedLoopTest {
 
     @Test
     void latencyIncludesQueueDelayAndServiceTimeDoesNot() {
-        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 1), 40, () -> {
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 1), 40, scheduledOffset -> {
             Thread.sleep(100);
             return Operation.Outcome.OK;
         });
@@ -70,7 +70,7 @@ final class PacedLoopTest {
 
     @Test
     void queueDepthIsBoundedSoOverloadShedsInsteadOfBacklogging() {
-        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 1), 100, () -> {
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 1), 100, scheduledOffset -> {
             Thread.sleep(100);
             return Operation.Outcome.OK;
         });
@@ -85,7 +85,7 @@ final class PacedLoopTest {
     @Test
     void failuresAndThrownExceptionsAreRecordedNotSwallowed() {
         AtomicInteger calls = new AtomicInteger();
-        PacedLoop.LoopResult result = PacedLoop.run(context(500 * MS, 0, 10), 40, () -> {
+        PacedLoop.LoopResult result = PacedLoop.run(context(500 * MS, 0, 10), 40, scheduledOffset -> {
             int n = calls.incrementAndGet();
             if (n % 3 == 0) {
                 throw new IllegalStateException("boom");
@@ -106,7 +106,7 @@ final class PacedLoopTest {
     @Test
     void operationsLandInTheBucketOfTheirScheduledInstant() {
         PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 20), 50,
-                () -> Operation.Outcome.OK);
+                scheduledOffset -> Operation.Outcome.OK);
 
         var buckets = result.series().buckets();
         assertThat(buckets).hasSize(5);
@@ -118,7 +118,7 @@ final class PacedLoopTest {
     @Test
     void rampIssuesFewerOperationsEarlyThanLate() {
         PacedLoop.LoopResult result = PacedLoop.run(context(2 * SECOND, SECOND, 50), 100,
-                () -> Operation.Outcome.OK);
+                scheduledOffset -> Operation.Outcome.OK);
 
         var buckets = result.series().buckets();
         long firstHalf = buckets.subList(0, 5).stream().mapToLong(b -> b.count()).sum();
@@ -131,7 +131,7 @@ final class PacedLoopTest {
     @Test
     void inFlightWorkIsDrainedBeforeTheResultIsReturned() {
         LongAdder completed = new LongAdder();
-        PacedLoop.LoopResult result = PacedLoop.run(context(300 * MS, 0, 50), 20, () -> {
+        PacedLoop.LoopResult result = PacedLoop.run(context(300 * MS, 0, 50), 20, scheduledOffset -> {
             Thread.sleep(200);
             completed.increment();
             return Operation.Outcome.OK;
@@ -146,7 +146,7 @@ final class PacedLoopTest {
     @Test
     void routineSchedulerOvershootIsNotReportedAsFallingShort() {
         PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 20), 50,
-                () -> Operation.Outcome.OK);
+                scheduledOffset -> Operation.Outcome.OK);
 
         assertThat(result.executedCount()).isEqualTo(result.scheduledCount());
         assertThat(result.lateFireCount()).isZero();
@@ -162,7 +162,7 @@ final class PacedLoopTest {
 
     @Test
     void expectedHitsIsReportedSoShortfallIsVisible() {
-        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 1), 200, () -> {
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 1), 200, scheduledOffset -> {
             Thread.sleep(50);
             return Operation.Outcome.OK;
         });

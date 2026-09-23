@@ -39,7 +39,7 @@ final class JsonExportTest {
 
         RunContext context = new RunContext(0, Instant.parse("2026-09-24T10:15:30Z"),
                 5 * SECOND, SECOND, SECOND, 8);
-        return new RunCoordinator.RunResult(context, runners);
+        return new RunCoordinator.RunResult(context, runners, null);
     }
 
     @Test
@@ -164,7 +164,7 @@ final class JsonExportTest {
         Map<String, PacedLoop.LoopResult> runners = new LinkedHashMap<>();
         runners.put("db", new PacedLoop.LoopResult(recorder.snapshot(), 1, 0, 0, 0, 1, true));
         var result = new RunCoordinator.RunResult(
-                new RunContext(0, Instant.EPOCH, SECOND, SECOND, 0, 1), runners);
+                new RunContext(0, Instant.EPOCH, SECOND, SECOND, 0, 1), runners, null);
 
         RunReport reloaded = JsonExport.parse(JsonExport.toJson(RunReport.from(result, "t")), "memory");
         long p99 = reloaded.runner("db").p99Nanos();

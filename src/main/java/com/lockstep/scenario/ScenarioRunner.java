@@ -7,6 +7,9 @@ import com.lockstep.core.RunContext;
 import com.lockstep.core.RunProgress;
 import com.lockstep.core.Runner;
 import com.lockstep.runner.WeightedPicker;
+import com.lockstep.stats.Bucket;
+import com.lockstep.stats.BucketSeries;
+import com.lockstep.stats.HistogramRecorder;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -26,6 +29,11 @@ public final class ScenarioRunner implements Runner {
     private final WeightedPicker<Journey> journeys;
     private final int rate;
     private final AtomicReference<String> lastFailure = new AtomicReference<>();
+
+    private final Map<String, HistogramRecorder> journeyRecorders = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, HistogramRecorder> stepRecorders = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile long bucketWidthNanos;
+    private volatile int bucketCount;
 
     private ScenarioRunner(HttpClient client, WeightedPicker<Journey> journeys, int rate) {
         this.client = client;
@@ -97,26 +105,117 @@ public final class ScenarioRunner implements Runner {
     }
 
     public PacedLoop.LoopResult run(RunContext context, RunProgress.Counter progress) {
+        this.bucketWidthNanos = context.bucketWidthNanos();
+        this.bucketCount = HistogramRecorder.bucketsFor(context.durationNanos(), bucketWidthNanos);
         return PacedLoop.run(context, rate, this::runJourney, progress);
     }
 
-    private Operation.Outcome runJourney() {
+    private Operation.Outcome runJourney(long scheduledOffsetNanos) {
         Journey journey = journeys.pick();
         Map<String, Object> vars = new HashMap<>();
         int lastStatus = 0;
+        long journeyStart = System.nanoTime();
 
         for (int index = 0; index < journey.steps().size(); index++) {
             Step step = journey.steps().get(index);
+            long stepStart = System.nanoTime();
             StepOutcome outcome = executeStep(journey, index, step, vars);
+            long stepNanos = System.nanoTime() - stepStart;
+
+            recorderFor(stepRecorders, stepKey(journey, index, step))
+                    .record(scheduledOffsetNanos, stepNanos, stepNanos,
+                            outcome.success(), outcome.status() > 0 ? outcome.status() : null);
+
             if (!outcome.success()) {
                 lastFailure.set(outcome.failure());
+                recordJourney(journey, scheduledOffsetNanos, journeyStart, false, outcome.status());
                 return outcome.status() > 0
                         ? Operation.Outcome.failed(outcome.status(), outcome.failure())
                         : Operation.Outcome.failed(outcome.failure());
             }
             lastStatus = outcome.status();
         }
+        recordJourney(journey, scheduledOffsetNanos, journeyStart, true, lastStatus);
         return lastStatus > 0 ? Operation.Outcome.ok(lastStatus) : Operation.Outcome.OK;
+    }
+
+    private void recordJourney(Journey journey, long scheduledOffsetNanos, long journeyStartNanoTime,
+            boolean success, int status) {
+        long serviceNanos = System.nanoTime() - journeyStartNanoTime;
+        recorderFor(journeyRecorders, journey.name())
+                .record(scheduledOffsetNanos, serviceNanos, serviceNanos, success,
+                        status > 0 ? status : null);
+    }
+
+    private HistogramRecorder recorderFor(Map<String, HistogramRecorder> recorders, String key) {
+        return recorders.computeIfAbsent(key,
+                ignored -> new HistogramRecorder(bucketWidthNanos, bucketCount));
+    }
+
+    static String stepKey(Journey journey, int index, Step step) {
+        String url = step.urlTemplate();
+        int schemeEnd = url.indexOf("://");
+        String path = url;
+        if (schemeEnd >= 0) {
+            int pathStart = url.indexOf('/', schemeEnd + 3);
+            path = pathStart < 0 ? "/" : url.substring(pathStart);
+        }
+        int query = path.indexOf('?');
+        if (query >= 0) {
+            path = path.substring(0, query);
+        }
+        return journey.name() + " · " + index + " " + step.method() + " " + (path.isEmpty() ? "/" : path);
+    }
+
+    public Map<String, BucketSeries> journeySeries() {
+        Map<String, BucketSeries> out = new java.util.LinkedHashMap<>();
+        for (Journey journey : journeys.items()) {
+            HistogramRecorder recorder = journeyRecorders.get(journey.name());
+            if (recorder != null) {
+                out.put(journey.name(), recorder.snapshot());
+            }
+        }
+        return out;
+    }
+
+    public Map<String, BucketSeries> stepSeries() {
+        Map<String, BucketSeries> out = new java.util.LinkedHashMap<>();
+        for (Journey journey : journeys.items()) {
+            for (int index = 0; index < journey.steps().size(); index++) {
+                String key = stepKey(journey, index, journey.steps().get(index));
+                HistogramRecorder recorder = stepRecorders.get(key);
+                if (recorder != null) {
+                    out.put(key, recorder.snapshot());
+                }
+            }
+        }
+        return out;
+    }
+
+    public List<Bucket> appTimeline() {
+        Map<Integer, Bucket> worst = new java.util.TreeMap<>();
+        for (BucketSeries series : journeySeries().values()) {
+            for (Bucket bucket : series.buckets()) {
+                if (bucket.count() == 0) {
+                    continue;
+                }
+                worst.merge(bucket.index(), bucket, ScenarioRunner::worseOf);
+            }
+        }
+        return List.copyOf(worst.values());
+    }
+
+    private static Bucket worseOf(Bucket a, Bucket b) {
+        return new Bucket(
+                a.index(), a.startOffsetNanos(), a.endOffsetNanos(),
+                a.count() + b.count(),
+                a.errorCount() + b.errorCount(),
+                Math.max(a.meanNanos(), b.meanNanos()),
+                Math.max(a.p50Nanos(), b.p50Nanos()),
+                Math.max(a.p95Nanos(), b.p95Nanos()),
+                Math.max(a.p99Nanos(), b.p99Nanos()),
+                Math.max(a.maxNanos(), b.maxNanos()),
+                Math.max(a.serviceP99Nanos(), b.serviceP99Nanos()));
     }
 
     private record StepOutcome(boolean success, int status, String failure) {}

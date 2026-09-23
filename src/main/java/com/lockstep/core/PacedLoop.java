@@ -108,7 +108,7 @@ public final class PacedLoop {
         long startedAt = System.nanoTime();
         Operation.Outcome outcome;
         try {
-            outcome = operation.execute();
+            outcome = operation.execute(scheduledOffset);
         } catch (Exception e) {
             outcome = Operation.Outcome.failed(e.getClass().getSimpleName()
                     + (e.getMessage() == null ? "" : ": " + e.getMessage()));
