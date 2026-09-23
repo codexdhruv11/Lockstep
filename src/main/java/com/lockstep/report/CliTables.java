@@ -62,6 +62,29 @@ public final class CliTables {
         return notes.toString();
     }
 
+    public static String spikeTable(com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation) {
+        if (!correlation.appReferencePresent()) {
+            return Ansi.dim("no application-side timeline — storage spikes cannot be correlated\n");
+        }
+        if (correlation.spikes().isEmpty()) {
+            return "";
+        }
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"TIME", "RUNNER", "APP_P99", "STORAGE_P99", "NOTE"});
+        for (var spike : correlation.spikes()) {
+            rows.add(new String[] {
+                Numbers.clock(spike.startOffsetNanos()),
+                spike.storageRunner(),
+                Numbers.latency(spike.appP99Nanos()),
+                Numbers.latency(spike.storageP99Nanos()),
+                spike.masked()
+                        ? spike.storageRunner() + "-only (app not affected yet)"
+                        : "correlated → " + spike.verdict(),
+            });
+        }
+        return "correlated spikes\n" + render(rows);
+    }
+
     public static String bucketTable(String runnerName, PacedLoop.LoopResult loop) {
         List<String[]> rows = new ArrayList<>();
         rows.add(new String[] {"BUCKET", "COUNT", "ERR", "P50", "P95", "P99", "MAX", "QUEUE_P99"});

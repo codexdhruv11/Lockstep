@@ -22,12 +22,24 @@ public record RunReport(
         long rampNanos,
         int concurrency,
         double percentilePrecision,
-        List<RunnerReport> runners) {
+        List<RunnerReport> runners,
+        List<SpikeReport> spikes) {
     public static final int SCHEMA_VERSION = 1;
 
     public RunReport {
         runners = List.copyOf(runners);
+        spikes = spikes == null ? List.of() : List.copyOf(spikes);
     }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record SpikeReport(
+            int bucketIndex,
+            long startOffsetNanos,
+            String storageRunner,
+            long storageP99Nanos,
+            long appP99Nanos,
+            boolean masked,
+            String verdict) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record RunnerReport(
@@ -71,6 +83,11 @@ public record RunReport(
             long serviceP99Nanos) {}
 
     public static RunReport from(RunCoordinator.RunResult result, String toolVersion) {
+        return from(result, toolVersion, null);
+    }
+
+    public static RunReport from(RunCoordinator.RunResult result, String toolVersion,
+            com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation) {
         List<RunnerReport> runners = new ArrayList<>();
         result.byRunner().forEach((name, loop) -> runners.add(runnerReport(name, loop, result)));
         return new RunReport(
@@ -83,7 +100,22 @@ public record RunReport(
                 result.context().rampNanos(),
                 result.context().concurrency(),
                 HistogramRecorder.PERCENTILE_PRECISION,
-                runners);
+                runners,
+                spikeReports(correlation));
+    }
+
+    private static List<SpikeReport> spikeReports(
+            com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation) {
+        if (correlation == null) {
+            return List.of();
+        }
+        List<SpikeReport> reports = new ArrayList<>();
+        for (var spike : correlation.spikes()) {
+            reports.add(new SpikeReport(spike.bucketIndex(), spike.startOffsetNanos(),
+                    spike.storageRunner(), spike.storageP99Nanos(), spike.appP99Nanos(),
+                    spike.masked(), spike.verdict().name()));
+        }
+        return reports;
     }
 
     private static RunnerReport runnerReport(String name, PacedLoop.LoopResult loop,

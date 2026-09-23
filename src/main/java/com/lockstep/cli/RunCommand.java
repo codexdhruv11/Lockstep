@@ -3,6 +3,7 @@ package com.lockstep.cli;
 import com.lockstep.config.Config;
 import com.lockstep.config.ConfigLoader;
 import com.lockstep.config.ConfigValidationException;
+import com.lockstep.analysis.SpikeCorrelator;
 import com.lockstep.core.RunCoordinator;
 import com.lockstep.core.RunProgress;
 import com.lockstep.report.CliTables;
@@ -49,6 +50,15 @@ public final class RunCommand implements Callable<Integer> {
 
     @Option(names = "--json", description = "Also write the results as JSON, for CI and `compare`.")
     Path jsonPath;
+
+    @Option(names = "--http-threshold", description = "App-side p99 spike threshold (default 100ms).")
+    String httpThreshold;
+
+    @Option(names = "--db-threshold", description = "Database p99 spike threshold (default 100ms).")
+    String dbThreshold;
+
+    @Option(names = "--redis-threshold", description = "Redis p99 spike threshold (default 100ms).")
+    String redisThreshold;
 
     @Override
     public Integer call() {
@@ -99,8 +109,15 @@ public final class RunCommand implements Callable<Integer> {
                 out.print(CliTables.bucketTable(name, loop));
             });
         }
+        SpikeCorrelator.CorrelationResult correlation =
+                SpikeCorrelator.correlate(result, thresholds());
+        String spikes = CliTables.spikeTable(correlation);
+        if (!spikes.isEmpty()) {
+            out.println();
+            out.print(spikes);
+        }
         if (jsonPath != null) {
-            JsonExport.write(RunReport.from(result, Version.value()), jsonPath);
+            JsonExport.write(RunReport.from(result, Version.value(), correlation), jsonPath);
             out.println();
             out.println("results written to " + jsonPath);
         }
@@ -108,6 +125,14 @@ public final class RunCommand implements Callable<Integer> {
         out.println(CliTables.precisionNote());
         out.flush();
         return EXIT_SUCCESS;
+    }
+
+    private SpikeCorrelator.Thresholds thresholds() {
+        SpikeCorrelator.Thresholds defaults = SpikeCorrelator.Thresholds.defaults();
+        return new SpikeCorrelator.Thresholds(
+                httpThreshold == null ? defaults.httpNanos() : Durations.parseToNanos(httpThreshold),
+                dbThreshold == null ? defaults.dbNanos() : Durations.parseToNanos(dbThreshold),
+                redisThreshold == null ? defaults.redisNanos() : Durations.parseToNanos(redisThreshold));
     }
 
     private Config applyOverrides(Config config) {

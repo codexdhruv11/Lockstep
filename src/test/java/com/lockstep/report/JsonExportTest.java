@@ -61,6 +61,17 @@ final class JsonExportTest {
     }
 
     @Test
+    void correlationFindingsSurviveIntoTheExport() {
+        var correlation = com.lockstep.analysis.SpikeCorrelator.correlate(
+                sampleRun(), com.lockstep.analysis.SpikeCorrelator.Thresholds.defaults());
+        RunReport report = RunReport.from(sampleRun(), "0.1.0-TEST", correlation);
+
+        String json = JsonExport.toJson(report);
+        assertThat(json).contains("\"spikes\"");
+        assertThat(JsonExport.parse(json, "memory").spikes()).isEqualTo(report.spikes());
+    }
+
+    @Test
     void theSchemaKeepsTheNamesComparePromisesToRead() {
         String json = JsonExport.toJson(RunReport.from(sampleRun(), "0.1.0-TEST"));
 
