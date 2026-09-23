@@ -1,6 +1,7 @@
 package com.lockstep.runner.db;
 
 import com.lockstep.config.DbConfig;
+import com.lockstep.runner.QueryPicker;
 import com.lockstep.config.QuerySpec;
 import com.lockstep.core.Operation;
 import com.lockstep.core.PacedLoop;

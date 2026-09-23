@@ -7,6 +7,7 @@ import com.lockstep.config.DbConfig;
 import com.lockstep.config.QuerySpec;
 import com.lockstep.core.PacedLoop;
 import com.lockstep.core.RunContext;
+import com.lockstep.runner.QueryPicker;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;

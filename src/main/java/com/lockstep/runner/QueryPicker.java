@@ -1,4 +1,4 @@
-package com.lockstep.runner.db;
+package com.lockstep.runner;
 
 import com.lockstep.config.QuerySpec;
 import java.util.List;
