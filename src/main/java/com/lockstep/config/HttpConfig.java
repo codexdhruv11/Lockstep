@@ -29,6 +29,14 @@ public record HttpConfig(Target target, int rate) {
             Map<String, List<String>> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
             if (rawHeader != null) {
                 for (Map.Entry<String, Object> entry : rawHeader.entrySet()) {
+                    if (headers.containsKey(entry.getKey())) {
+                        String existing = headers.keySet().stream()
+                                .filter(k -> k.equalsIgnoreCase(entry.getKey()))
+                                .findFirst().orElse(entry.getKey());
+                        throw new ConfigValidationException("http.target.header",
+                                "header \"" + entry.getKey() + "\" conflicts with \""
+                                        + existing + "\" (case-insensitive duplicate)");
+                    }
                     Object value = entry.getValue();
                     if (value instanceof String s) {
                         headers.put(entry.getKey(), List.of(s));

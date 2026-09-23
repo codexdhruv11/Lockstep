@@ -473,6 +473,42 @@ final class ConfigLoaderTest {
     }
 
     @Test
+    void rejectsCaseInsensitiveDuplicateHeaders() {
+        String yaml = """
+                duration: 10s
+                bucket_width: 1s
+                http:
+                  rate: 1
+                  target:
+                    url: http://localhost/x
+                    header:
+                      Accept: application/json
+                      accept: text/plain
+                """;
+        assertThatThrownBy(() -> ConfigLoader.loadString(yaml, "dupheader.yaml"))
+                .isInstanceOf(ConfigValidationException.class)
+                .hasMessageContaining("accept")
+                .hasMessageContaining("Accept")
+                .hasMessageContaining("case-insensitive duplicate");
+    }
+
+    @Test
+    void scenarioWeightZeroSurvivesLoadUnchanged() {
+        String yaml = """
+                duration: 10s
+                bucket_width: 1s
+                scenario:
+                  - name: zero-weight
+                    weight: 0
+                    steps:
+                      - method: GET
+                        url: http://localhost/y
+                """;
+        Config config = ConfigLoader.loadString(yaml, "zerow.yaml");
+        assertThat(config.scenario().get(0).weight()).isZero();
+    }
+
+    @Test
     void missingFileFailsWithReadableMessage() {
         assertThatThrownBy(() -> ConfigLoader.load(Path.of("does-not-exist.yaml")))
                 .isInstanceOf(ConfigValidationException.class)
@@ -480,7 +516,7 @@ final class ConfigLoaderTest {
     }
 
     @Test
-    void integerDurationMeansNanosecondsLikeTheReference() {
+    void integerDurationMeansNanoseconds() {
         String yaml = """
                 duration: 10000000000
                 bucket_width: 1000000000

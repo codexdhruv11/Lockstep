@@ -129,6 +129,20 @@ public final class ConfigLoader {
             if (cause instanceof ConfigValidationException cve) {
                 throw cve;
             }
+
+            if (cause instanceof com.fasterxml.jackson.databind.JsonMappingException jme) {
+                String field = jme.getPath().stream()
+                        .map(ref -> ref.getFieldName() != null ? ref.getFieldName()
+                                : "[" + ref.getIndex() + "]")
+                        .reduce((a, b) -> a + "." + b)
+                        .orElse(null);
+                String original = jme.getOriginalMessage();
+                if (field != null) {
+                    throw new ConfigValidationException(field,
+                            "config \"" + sourceName + "\": invalid value for " + field
+                                    + (original != null ? " — " + original : ""));
+                }
+            }
             throw new ConfigValidationException("config \"" + sourceName + "\": " + e.getMessage());
         }
     }
