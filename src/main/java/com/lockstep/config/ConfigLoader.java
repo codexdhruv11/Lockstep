@@ -126,10 +126,14 @@ public final class ConfigLoader {
             return MAPPER.convertValue(root, Config.class);
         } catch (IllegalArgumentException e) {
             Throwable cause = e.getCause();
-            if (cause instanceof ConfigValidationException cve) {
-                throw cve;
+            while (cause != null) {
+                if (cause instanceof ConfigValidationException cve) {
+                    throw cve;
+                }
+                cause = cause.getCause();
             }
 
+            cause = e.getCause();
             if (cause instanceof com.fasterxml.jackson.databind.JsonMappingException jme) {
                 String field = jme.getPath().stream()
                         .map(ref -> ref.getFieldName() != null ? ref.getFieldName()
