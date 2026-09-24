@@ -71,6 +71,50 @@ For each bucket where the database or Redis crossed its p99 threshold:
 Buckets where **only** HTTP was slow are deliberately not flagged. A slow endpoint over idle data
 stores is an application problem, and this tool's claim is about storage.
 
+### Finding the capacity
+
+`find-capacity` runs the workload at a staircase of rates and reports the one it stops keeping up
+at, instead of you running the tool by hand at 20/s, then 250/s, then 120/s, then 60/s:
+
+```
+$ lockstep find-capacity -c dashboard.yaml --step 6s
+
+capacity search
+RATE  DELIVERED        P99     SLOWEST  VERDICT
+30/s  30.0/s (100.0%)  83.4ms  db       held
+60/s  60.0/s (100.0%)  2.4s    db       strained — p99 blew up
+45/s  45.0/s (100.0%)  734ms   db       strained — p99 blew up
+38/s  38.0/s (100.0%)  310ms   db       strained — p99 blew up
+34/s  34.0/s (100.0%)  169ms   db       held
+36/s  36.0/s (100.0%)  204ms   db       held
+37/s  37.0/s (100.0%)  209ms   db       held
+
+capacity: sustains 37/s, strains at 38/s
+```
+
+It starts at the config's own rate and doubles until something gives — or **halves** if the
+configured rate is already too much, which is the state you are usually in when you reach for
+this. Once the answer is bracketed it bisects, because "sustains 60/s, strains at 120/s" is not
+an answer.
+
+**Two independent ways to fail**, and it says which one fired: the generator could not hand over
+the load (work was shed because every worker was busy), or the rate held while p99 blew past the
+baseline. Checking only the first misses a system that keeps accepting requests and takes four
+seconds over each; checking only the second misses one that keeps latency flat by refusing work.
+
+**Latency is judged against the first rate that held**, fixed for the whole search. A baseline
+that followed the search accepts a further 3× at every step, so it converges on a rate whose
+latency is many times the healthy one and calls it sustained — and makes the same rate get
+different verdicts depending on when it was tried.
+
+Each step holds one rate rather than ramping through it: a continuous ramp holds no rate long
+enough to measure, so the level at which the curve bends is not the level that caused it. One
+unmeasured step runs first so the JVM is compiled before anything is believed.
+
+A scenario-only config is **refused**: a scenario's arrival rate comes from concurrency, so
+scaling it would change the worker pool at the same time and the answer would not mean what it
+says.
+
 ### Capacity finder
 
 Maps each bucket to an estimated active-user count and reports the first **sustained** strain —
@@ -207,6 +251,7 @@ budget is how much extra waiting a user tolerates, so 5ms→40ms passes and 900m
 ## Commands
 
 ```
+lockstep find-capacity [-c config.yaml] [--step 10s] [--max-steps 9] [--concurrency 50]
 lockstep run [-c config.yaml] [--duration 30s] [--ramp 10s] [--concurrency 50]
                 [--warmup 5s] [--no-explain]
                 [--http-threshold 150ms] [--db-threshold 250ms] [--redis-threshold 80ms]
@@ -310,6 +355,8 @@ of what this tool is for.
 - `compare` diffs p50 and p99 and flags diverging throughput, but does not compare per-step or
   per-query figures.
 - Thresholds are absolute cut-offs; nothing adapts to what is normal for your target.
+- `find-capacity` scales http, db and redis rates; a scenario-only config is refused rather than
+  answered wrongly.
 - Without `--warmup`, a short run's first bucket can still produce a finding about the JVM.
 
 ## Build
@@ -318,7 +365,7 @@ Requires **Java 21** (virtual threads) and Maven.
 
 ```sh
 mvn clean package            # target/lockstep.jar
-mvn clean verify             # 275 tests; Postgres and Redis tests need Docker
+mvn clean verify             # 294 tests; Postgres and Redis tests need Docker
 ```
 
 Tests that need Docker skip themselves by name when it is unavailable, rather than passing

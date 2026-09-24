@@ -25,6 +25,42 @@ public record Config(
         return scenario == null ? List.of() : List.copyOf(scenario);
     }
 
+    public Config scaledBy(double multiplier) {
+        return new Config(duration, bucketWidth, ramp, concurrency,
+                http == null ? null : new HttpConfig(http.target(), scaleRate(http.rate(), multiplier)),
+                db == null ? null : new DbConfig(new DbConfig.Target(db.target().conn(),
+                        db.target().driver(), db.target().queries(), db.target().poolSize()),
+                        scaleRate(db.rate(), multiplier)),
+                redis == null ? null : new RedisConfig(redis.target(), scaleRate(redis.rate(), multiplier)),
+                scenario);
+    }
+
+    private static int scaleRate(int rate, double multiplier) {
+        return Math.max(1, (int) Math.round(rate * multiplier));
+    }
+
+    public boolean hasScalableRate() {
+        return http != null || db != null || redis != null;
+    }
+
+    public java.util.Map<String, Integer> ratesByRunner() {
+        java.util.Map<String, Integer> rates = new java.util.LinkedHashMap<>();
+        if (http != null) {
+            rates.put("http", http.rate());
+        }
+        if (db != null) {
+            rates.put("db", db.rate());
+        }
+        if (redis != null) {
+            rates.put("redis", redis.rate());
+        }
+        return rates;
+    }
+
+    public Config withDuration(long durationNanos) {
+        return new Config(durationNanos, bucketWidth, ramp, concurrency, http, db, redis, scenario);
+    }
+
     @JsonCreator
     static Config fromJson(
             @JsonProperty("duration") Object duration,

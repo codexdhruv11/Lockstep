@@ -263,6 +263,98 @@ public final class CliTables {
         return oneLine.length() <= 70 ? oneLine : oneLine.substring(0, 69) + "\u2026";
     }
 
+    public static String describeRates(Map<String, Integer> baseRates, double multiplier) {
+        if (baseRates.isEmpty()) {
+            return "-";
+        }
+        if (baseRates.size() == 1) {
+            var only = baseRates.entrySet().iterator().next();
+            return scaled(only.getValue(), multiplier) + "/s";
+        }
+        return baseRates.entrySet().stream()
+                .map(entry -> entry.getKey() + " " + scaled(entry.getValue(), multiplier) + "/s")
+                .collect(Collectors.joining(" + "));
+    }
+
+    private static int scaled(int rate, double multiplier) {
+        return Math.max(1, (int) Math.round(rate * multiplier));
+    }
+
+    public static String capacitySearchTable(
+            com.lockstep.analysis.CapacitySearch.Result result, Map<String, Integer> baseRates) {
+        if (result.steps().isEmpty()) {
+            return "";
+        }
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"RATE", "DELIVERED", "P99", "SLOWEST", "VERDICT"});
+        for (var step : result.steps()) {
+            var measurement = step.measurement();
+            rows.add(new String[] {
+                describeRates(baseRates, step.multiplier()),
+
+                Numbers.rate(measurement.achievedRatePerSecond())
+                        + " (" + Numbers.percent(measurement.deliveryRatio()) + ")",
+                Numbers.latency(measurement.p99Nanos()),
+                measurement.runnerName(),
+                switch (step.strain()) {
+                    case NONE -> "held";
+                    case SHED -> "strained — shed load";
+                    case LATENCY -> "strained — p99 blew up";
+                },
+            });
+        }
+        return "capacity search\n" + render(rows);
+    }
+
+    public static String capacitySearchVerdict(
+            com.lockstep.analysis.CapacitySearch.Result result, Map<String, Integer> baseRates,
+            int concurrency) {
+        StringBuilder out = new StringBuilder();
+        if (result.bracketed()) {
+            var held = result.sustained();
+            var gave = result.strained();
+            out.append("capacity: sustains %s, strains at %s\n".formatted(
+                    describeRates(baseRates, held.multiplier()),
+                    describeRates(baseRates, gave.multiplier())));
+            out.append("  at %s: %s delivered, p99 %s\n".formatted(
+                    describeRates(baseRates, held.multiplier()),
+                    Numbers.rate(held.measurement().achievedRatePerSecond()),
+                    Numbers.latency(held.measurement().p99Nanos())));
+            out.append("  at %s: %s\n".formatted(
+                    describeRates(baseRates, gave.multiplier()),
+                    switch (gave.strain()) {
+                        case SHED -> "%s could not be given the load — %s of %s delivered"
+                                .formatted(gave.measurement().runnerName(),
+                                        Numbers.withSeparators(gave.measurement().executedCount()),
+                                        Numbers.withSeparators(gave.measurement().scheduledCount()));
+                        case LATENCY -> "%s held the rate but its p99 went to %s, from %s"
+                                .formatted(gave.measurement().runnerName(),
+                                        Numbers.latency(gave.measurement().p99Nanos()),
+                                        Numbers.latency(held.measurement().p99Nanos()));
+                        case NONE -> "strained";
+                    }));
+        } else if (result.sustained() != null) {
+            out.append("capacity: not found — %s held, the highest rate tried\n".formatted(
+                    describeRates(baseRates, result.sustained().multiplier())));
+            out.append("  raise the config's rate, or allow more steps\n");
+        } else {
+            out.append("capacity: not found — the lowest rate tried, %s, already strained\n"
+                    .formatted(describeRates(baseRates, lowestMultiplier(result))));
+            out.append("  lower the config's rate, or allow more steps\n");
+        }
+
+        out.append(Ansi.dim(
+                "  measured with " + concurrency + " workers on this machine, which also generated "
+                + "the load\n  the shape transfers; the absolute number does not"));
+        return out.append('\n').toString();
+    }
+
+    private static double lowestMultiplier(com.lockstep.analysis.CapacitySearch.Result result) {
+        return result.steps().stream()
+                .mapToDouble(com.lockstep.analysis.CapacitySearch.Observation::multiplier)
+                .min().orElse(1.0);
+    }
+
     public static String warmupNote(long warmupNanos) {
         return Ansi.dim("first " + com.lockstep.util.Durations.formatNanos(warmupNanos)
                 + " treated as warm-up: still measured and printed above, excluded from spikes "
