@@ -51,6 +51,12 @@ public final class CliTables {
                 parts.add(Numbers.withSeparators(loop.lateFireCount()) + " fired late, worst "
                         + Numbers.latency(loop.maxLatenessNanos()));
             }
+            var summary = loop.series().summarize(name, result.context().durationNanos());
+            if (summary.clampedEarlyCount() + summary.clampedLateCount() > 0) {
+                parts.add(Numbers.withSeparators(
+                        summary.clampedEarlyCount() + summary.clampedLateCount())
+                        + " landed outside the run window and were clamped into it");
+            }
             if (loop.abandonedCount() > 0) {
                 parts.add(Numbers.withSeparators(loop.abandonedCount())
                         + " still running when the run gave up waiting");
@@ -95,9 +101,19 @@ public final class CliTables {
     }
 
     public static String capacityLine(com.lockstep.analysis.CapacityFinder.Capacity capacity) {
+        return capacityLine(capacity, 0);
+    }
+
+    public static String capacityLine(com.lockstep.analysis.CapacityFinder.Capacity capacity,
+            long warmupNanos) {
         if (!capacity.usable()) {
+            String because = warmupNanos > 0
+                    ? " — the first " + com.lockstep.util.Durations.formatNanos(warmupNanos)
+                            + " is excluded as warm-up"
+                    : "";
             return Ansi.dim("capacity: run too short to say (needs "
-                    + com.lockstep.analysis.CapacityFinder.MINIMUM_BUCKETS + "+ buckets with traffic)\n");
+                    + com.lockstep.analysis.CapacityFinder.MINIMUM_BUCKETS
+                    + "+ buckets with traffic" + because + ")\n");
         }
         String headline = capacity.strained()
                 ? "capacity: strain starts around ~%d users (at %s, p99 crossed %s against a %s baseline)"
@@ -151,6 +167,12 @@ public final class CliTables {
             });
         });
         return "steps\n" + render(rows);
+    }
+
+    public static String warmupNote(long warmupNanos) {
+        return Ansi.dim("first " + com.lockstep.util.Durations.formatNanos(warmupNanos)
+                + " treated as warm-up: still measured and printed above, excluded from spikes "
+                + "and the capacity baseline");
     }
 
     public static String runHeader(RunCoordinator.RunResult result) {

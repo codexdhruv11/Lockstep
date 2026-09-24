@@ -65,7 +65,8 @@ public final class SpikeCorrelator {
     public static final java.util.Set<String> STORAGE_RUNNERS = java.util.Set.of("db", "redis");
 
     public static CorrelationResult correlate(RunCoordinator.RunResult result, Thresholds thresholds) {
-        return correlate(appTimelineOf(result), storageTimelinesOf(result), thresholds);
+        return correlate(appTimelineOf(result), storageTimelinesOf(result), thresholds,
+                result.context().warmupNanos());
     }
 
     public static List<Bucket> appTimelineOf(RunCoordinator.RunResult result) {
@@ -88,6 +89,11 @@ public final class SpikeCorrelator {
 
     public static CorrelationResult correlate(List<Bucket> appBuckets,
             Map<String, List<Bucket>> storageByRunner, Thresholds thresholds) {
+        return correlate(appBuckets, storageByRunner, thresholds, 0);
+    }
+
+    public static CorrelationResult correlate(List<Bucket> appBuckets,
+            Map<String, List<Bucket>> storageByRunner, Thresholds thresholds, long warmupNanos) {
         if (appBuckets == null || appBuckets.isEmpty()) {
             return CorrelationResult.empty(false);
         }
@@ -103,6 +109,9 @@ public final class SpikeCorrelator {
             long threshold = thresholds.forStorage(runnerName);
             for (Bucket storageBucket : buckets) {
                 if (storageBucket.count() == 0 || storageBucket.p99Nanos() <= threshold) {
+                    continue;
+                }
+                if (warmupNanos > 0 && storageBucket.startOffsetNanos() < warmupNanos) {
                     continue;
                 }
                 Bucket appBucket = appByIndex.get(storageBucket.index());

@@ -85,6 +85,8 @@ public record RunReport(
             long lateFireCount,
             long maxLatenessNanos,
             boolean drainedCleanly,
+            long clampedEarlyCount,
+            long clampedLateCount,
             long meanNanos,
             long p50Nanos,
             long p95Nanos,
@@ -211,6 +213,7 @@ public record RunReport(
                 summary.achievedRatePerSecond(), loop.scheduledCount(), loop.expectedHits(),
                 loop.shedCount(), loop.abandonedCount(), loop.lateFireCount(),
                 loop.maxLatenessNanos(), loop.drainedCleanly(),
+                summary.clampedEarlyCount(), summary.clampedLateCount(),
                 summary.meanNanos(), summary.p50Nanos(), summary.p95Nanos(), summary.p99Nanos(),
                 summary.maxNanos(), summary.serviceP99Nanos(), statuses, buckets);
     }

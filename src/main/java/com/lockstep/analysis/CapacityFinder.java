@@ -44,11 +44,19 @@ public final class CapacityFinder {
 
     public static Capacity find(List<Bucket> appBuckets, int concurrency, long rampNanos,
             long bucketWidthNanos) {
+        return find(appBuckets, concurrency, rampNanos, bucketWidthNanos, 0);
+    }
+
+    public static Capacity find(List<Bucket> appBuckets, int concurrency, long rampNanos,
+            long bucketWidthNanos, long warmupNanos) {
         int usersAtEnd = Math.max(0, concurrency);
         if (appBuckets == null || concurrency <= 0 || bucketWidthNanos <= 0) {
             return Capacity.notUsable(usersAtEnd);
         }
-        List<Bucket> populated = appBuckets.stream().filter(bucket -> bucket.count() > 0).toList();
+        List<Bucket> populated = appBuckets.stream()
+                .filter(bucket -> bucket.count() > 0)
+                .filter(bucket -> warmupNanos <= 0 || bucket.startOffsetNanos() >= warmupNanos)
+                .toList();
         if (populated.size() < MINIMUM_BUCKETS) {
             return Capacity.notUsable(usersAtEnd);
         }

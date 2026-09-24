@@ -565,4 +565,64 @@ final class ConfigLoaderTest {
         assertThat(config.duration()).isEqualTo(5_000_000_000L);
         assertThat(config.redis().rate()).isEqualTo(2);
     }
+
+    @Test
+    void aBlankOrDuplicateScenarioNameIsRejected() {
+        String duplicate = """
+            duration: 5s
+            scenario:
+              - name: checkout
+                steps:
+                  - method: GET
+                    url: http://x/a
+              - name: checkout
+                steps:
+                  - method: GET
+                    url: http://x/b
+            """;
+        assertThatThrownBy(() -> ConfigLoader.loadString(duplicate, "dup.yaml"))
+                .isInstanceOf(ConfigValidationException.class)
+                .hasMessageContaining("duplicate scenario name");
+
+        String blank = """
+            duration: 5s
+            scenario:
+              - name: ""
+                steps:
+                  - method: GET
+                    url: http://x/a
+            """;
+        assertThatThrownBy(() -> ConfigLoader.loadString(blank, "blank.yaml"))
+                .isInstanceOf(ConfigValidationException.class)
+                .hasMessageContaining("must have a name");
+    }
+
+    @Test
+    void poolSizeIsConfigurableAndDefaultsToConcurrency() {
+        String yaml = """
+            duration: 5s
+            concurrency: 8
+            db:
+              rate: 5
+              target:
+                driver: postgres
+                conn: postgres://u:p@h:5432/d
+                pool_size: 2
+                queries:
+                  - query: SELECT 1
+                    weight: 1
+                    type: read
+            """;
+        assertThat(ConfigLoader.loadString(yaml, "pool.yaml").db().target().poolSize()).isEqualTo(2);
+
+        String without = yaml.lines()
+                .filter(line -> !line.contains("pool_size"))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertThat(ConfigLoader.loadString(without, "pool.yaml").db().target().poolSize()).isZero();
+
+        String negative = yaml.replace("pool_size: 2", "pool_size: -1");
+        assertThatThrownBy(() -> ConfigLoader.loadString(negative, "pool.yaml"))
+                .isInstanceOf(ConfigValidationException.class)
+                .hasMessageContaining("pool_size");
+    }
 }

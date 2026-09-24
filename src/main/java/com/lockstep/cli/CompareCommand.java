@@ -40,6 +40,10 @@ public final class CompareCommand implements Callable<Integer> {
     @Option(names = "--no-report", description = "Skip writing the HTML comparison.")
     boolean noReport;
 
+    @Option(names = "--no-fail-on-findings", description =
+            "Do not fail when storage spikes the application feels have increased.")
+    boolean noFailOnFindings;
+
     @Option(names = "--fail-on", description =
             "How much p99 growth is tolerated before a runner counts as regressed (default: ${DEFAULT-VALUE}).")
     String failOn = "100ms";
@@ -63,7 +67,7 @@ public final class CompareCommand implements Callable<Integer> {
 
         RunComparator.Comparison comparison;
         try {
-            comparison = RunComparator.compare(baseline, current, budget);
+            comparison = RunComparator.compare(baseline, current, budget, !noFailOnFindings);
         } catch (IllegalArgumentException e) {
             err.println(Ansi.error(e.getMessage()));
             return EXIT_INPUT_ERROR;
@@ -88,8 +92,12 @@ public final class CompareCommand implements Callable<Integer> {
                 .toList();
         if (!findings.isEmpty()) {
             out.println();
-            out.println(Ansi.accent("! ") + "storage spikes the application feels have increased:");
+            out.println((noFailOnFindings ? Ansi.accent("! ") : Ansi.error("FAIL "))
+                    + "storage spikes the application feels have increased:");
             findings.forEach(finding -> out.println("  " + finding));
+            if (noFailOnFindings) {
+                out.println("  (not failing the build: --no-fail-on-findings)");
+            }
         }
 
         if (!noReport) {
@@ -111,17 +119,23 @@ public final class CompareCommand implements Callable<Integer> {
 
     private static String table(RunComparator.Comparison comparison) {
         List<String[]> rows = new ArrayList<>();
-        rows.add(new String[] {"RUNNER", "BASELINE_P99", "CURRENT_P99", "CHANGE", "VERDICT"});
+        rows.add(new String[] {"RUNNER", "BASELINE_P50", "CURRENT_P50", "BASELINE_P99",
+            "CURRENT_P99", "CHANGE", "VERDICT"});
         for (RunComparator.RunnerDiff diff : comparison.runners()) {
+            boolean oneSided = diff.verdict() == RunComparator.Verdict.NEW
+                    || diff.verdict() == RunComparator.Verdict.REMOVED;
+            String verdict = diff.p50Verdict() == RunComparator.Verdict.REGRESSION
+                    && diff.verdict() != RunComparator.Verdict.REGRESSION
+                    ? "REGRESSION (p50)"
+                    : diff.verdict().name();
             rows.add(new String[] {
                 diff.name(),
+                diff.verdict() == RunComparator.Verdict.NEW ? "-" : Numbers.latency(diff.baselineP50Nanos()),
+                diff.verdict() == RunComparator.Verdict.REMOVED ? "-" : Numbers.latency(diff.currentP50Nanos()),
                 diff.verdict() == RunComparator.Verdict.NEW ? "-" : Numbers.latency(diff.baselineP99Nanos()),
                 diff.verdict() == RunComparator.Verdict.REMOVED ? "-" : Numbers.latency(diff.currentP99Nanos()),
-                switch (diff.verdict()) {
-                    case NEW, REMOVED -> "-";
-                    default -> String.format(Locale.ROOT, "%+.0f%%", diff.changeFraction() * 100);
-                },
-                diff.verdict().name(),
+                oneSided ? "-" : String.format(Locale.ROOT, "%+.0f%%", diff.changeFraction() * 100),
+                verdict,
             });
         }
         int columns = rows.get(0).length;
@@ -142,7 +156,7 @@ public final class CompareCommand implements Callable<Integer> {
             }
             String text = line.toString().stripTrailing();
             out.append(r == 0 ? Ansi.bold(text)
-                    : rows.get(r)[4].equals("REGRESSION") ? Ansi.error(text) : text).append('\n');
+                    : rows.get(r)[6].startsWith("REGRESSION") ? Ansi.error(text) : text).append('\n');
         }
         return out.toString();
     }

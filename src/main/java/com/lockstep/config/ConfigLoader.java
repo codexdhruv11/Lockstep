@@ -76,7 +76,7 @@ public final class ConfigLoader {
             Map.entry("db", Set.of("rate", "target")),
             Map.entry("redis", Set.of("rate", "target")),
             Map.entry("http.target", Set.of("method", "url", "body", "header")),
-            Map.entry("db.target", Set.of("conn", "driver", "queries")),
+            Map.entry("db.target", Set.of("conn", "driver", "queries", "pool_size")),
             Map.entry("redis.target", Set.of("addr", "password", "db", "queries")),
             Map.entry("db.target.queries.*", Set.of("query", "weight", "type", "args")),
             Map.entry("redis.target.queries.*", Set.of("query", "weight", "type", "args")),
@@ -208,6 +208,10 @@ public final class ConfigLoader {
         if (db.target().driver().isBlank()) {
             throw new ConfigValidationException("db.target.driver", at + ": db target driver must not be empty");
         }
+        if (db.target().poolSize() < 0) {
+            throw new ConfigValidationException("db.target.pool_size",
+                    at + ": db target pool_size must not be negative");
+        }
         validateQueries(db.target().queries(), "db", at);
     }
 
@@ -222,6 +226,19 @@ public final class ConfigLoader {
     }
 
     private static void validateScenarios(List<ScenarioConfig> scenarios, String at) {
+        Set<String> seenNames = new java.util.HashSet<>();
+        for (int i = 0; i < scenarios.size(); i++) {
+            String scenarioName = scenarios.get(i).name();
+            if (scenarioName == null || scenarioName.isBlank()) {
+                throw new ConfigValidationException("scenario.name",
+                        at + ": scenario[" + i + "] must have a name — names key the per-journey metrics");
+            }
+            if (!seenNames.add(scenarioName)) {
+                throw new ConfigValidationException("scenario.name",
+                        at + ": duplicate scenario name \"" + scenarioName
+                                + "\" — their metrics would be merged into one row");
+            }
+        }
         for (int i = 0; i < scenarios.size(); i++) {
             ScenarioConfig scenario = scenarios.get(i);
             String name = scenario.name() == null || scenario.name().isBlank()

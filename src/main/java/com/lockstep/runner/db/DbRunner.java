@@ -45,8 +45,10 @@ public final class DbRunner implements Runner {
         if (target.password() != null) {
             hikari.setPassword(target.password());
         }
-        hikari.setMaximumPoolSize(Math.max(1, concurrency));
-        hikari.setMinimumIdle(Math.max(1, concurrency));
+
+        int poolSize = config.target().poolSize() > 0 ? config.target().poolSize() : Math.max(1, concurrency);
+        hikari.setMaximumPoolSize(poolSize);
+        hikari.setMinimumIdle(poolSize);
         hikari.setPoolName("lockstep-db");
 
         hikari.setInitializationFailTimeout(10_000);

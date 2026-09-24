@@ -15,8 +15,14 @@ final class RunComparatorTest {
     private static final long MS = 1_000_000L;
     private static final long SECOND = 1_000_000_000L;
 
+    private static RunReport.RunnerReport runner(String name, long p99Nanos, long p50Nanos, long count) {
+        return new RunReport.RunnerReport(name, count, count, 0, 10.0, count, count, 0, 0, 0, 0, true, 0, 0,
+                p50Nanos, p50Nanos, p99Nanos - MS, p99Nanos, p99Nanos, p99Nanos,
+                Map.of("200", count), List.of());
+    }
+
     private static RunReport.RunnerReport runner(String name, long p99Nanos) {
-        return new RunReport.RunnerReport(name, 100, 100, 0, 10.0, 100, 100, 0, 0, 0, 0, true,
+        return new RunReport.RunnerReport(name, 100, 100, 0, 10.0, 100, 100, 0, 0, 0, 0, true, 0, 0,
                 p99Nanos / 2, p99Nanos / 2, p99Nanos - MS, p99Nanos, p99Nanos, p99Nanos,
                 Map.of("200", 100L), List.of());
     }
@@ -192,6 +198,57 @@ final class RunComparatorTest {
         assertThat(html).contains("\"verdict\" : \"REGRESSION\"");
         assertThat(html).contains("\"budgetNanos\" : 100000000");
         assertThat(html).doesNotContain("src=\"http");
+    }
+
+    @Test
+    void aRegressionThatMovesOnlyTheMedianIsCaught() {
+        Comparison comparison = RunComparator.compare(
+                report(List.of(runner("http", 500 * MS, 20 * MS, 100))),
+                report(List.of(runner("http", 505 * MS, 320 * MS, 100))),
+                100 * MS);
+
+        var diff = comparison.runners().get(0);
+        assertThat(diff.verdict()).isEqualTo(Verdict.OK);
+        assertThat(diff.p50Verdict()).isEqualTo(Verdict.REGRESSION);
+        assertThat(comparison.failed()).isTrue();
+    }
+
+    @Test
+    void aRunThatShedHalfItsLoadIsFlaggedEvenWhenItsLatencyLooksBetter() {
+        Comparison comparison = RunComparator.compare(
+                report(List.of(runner("db", 500 * MS, 100 * MS, 1000))),
+                report(List.of(runner("db", 200 * MS, 40 * MS, 400))),
+                100 * MS);
+
+        assertThat(comparison.runners().get(0).throughputDiverged()).isTrue();
+        assertThat(comparison.warnings()).anyMatch(w -> w.contains("shed load"));
+    }
+
+    @Test
+    void findingsGettingWorseFailsTheGateByDefault() {
+        List<RunReport.SpikeReport> before = List.of(spike("db", true), spike("db", true));
+        List<RunReport.SpikeReport> after = List.of(spike("db", false), spike("db", false));
+
+        Comparison failing = RunComparator.compare(
+                report(List.of(runner("db", 200 * MS)), before, 0.01, 10 * SECOND, 8),
+                report(List.of(runner("db", 205 * MS)), after, 0.01, 10 * SECOND, 8),
+                100 * MS);
+        assertThat(failing.regressions()).isEmpty();
+        assertThat(failing.failed()).isTrue();
+    }
+
+    @Test
+    void findingsCanBeExcludedFromTheGateDeliberately() {
+        List<RunReport.SpikeReport> before = List.of(spike("db", true));
+        List<RunReport.SpikeReport> after = List.of(spike("db", false));
+
+        Comparison comparison = RunComparator.compare(
+                report(List.of(runner("db", 200 * MS)), before, 0.01, 10 * SECOND, 8),
+                report(List.of(runner("db", 205 * MS)), after, 0.01, 10 * SECOND, 8),
+                100 * MS, false);
+
+        assertThat(comparison.worsenedFindings()).hasSize(1);
+        assertThat(comparison.failed()).isFalse();
     }
 
     @Test

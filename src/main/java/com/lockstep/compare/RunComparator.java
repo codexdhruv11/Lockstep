@@ -28,6 +28,11 @@ public final class RunComparator {
             long baselineP99Nanos,
             long currentP99Nanos,
             double changeFraction,
+            long baselineP50Nanos,
+            long currentP50Nanos,
+            Verdict p50Verdict,
+            long baselineCount,
+            long currentCount,
             Verdict verdict,
             long baselineSpikes,
             long currentSpikes,
@@ -35,6 +40,18 @@ public final class RunComparator {
             long currentCorrelated) {
         public boolean findingsWorsened() {
             return currentCorrelated > baselineCorrelated;
+        }
+
+        public boolean throughputDiverged() {
+            if (baselineCount == 0 || currentCount == 0) {
+                return false;
+            }
+            double ratio = (double) currentCount / baselineCount;
+            return ratio < 0.9 || ratio > 1.1;
+        }
+
+        public boolean regressed() {
+            return verdict == Verdict.REGRESSION || p50Verdict == Verdict.REGRESSION;
         }
     }
 
@@ -51,7 +68,7 @@ public final class RunComparator {
     }
 
     public record Comparison(List<RunnerDiff> runners, long budgetNanos, List<String> warnings,
-            List<SpikePair> spikePairs) {
+            List<SpikePair> spikePairs, boolean failOnFindings) {
         public Comparison {
             runners = List.copyOf(runners);
             warnings = List.copyOf(warnings);
@@ -59,15 +76,24 @@ public final class RunComparator {
         }
 
         public List<RunnerDiff> regressions() {
-            return runners.stream().filter(diff -> diff.verdict() == Verdict.REGRESSION).toList();
+            return runners.stream().filter(RunnerDiff::regressed).toList();
+        }
+
+        public List<RunnerDiff> worsenedFindings() {
+            return runners.stream().filter(RunnerDiff::findingsWorsened).toList();
         }
 
         public boolean failed() {
-            return !regressions().isEmpty();
+            return !regressions().isEmpty() || (failOnFindings && !worsenedFindings().isEmpty());
         }
     }
 
     public static Comparison compare(RunReport baseline, RunReport current, long budgetNanos) {
+        return compare(baseline, current, budgetNanos, true);
+    }
+
+    public static Comparison compare(RunReport baseline, RunReport current, long budgetNanos,
+            boolean failOnFindings) {
         requireComparablePrecision(baseline, current);
 
         List<String> warnings = new ArrayList<>();
@@ -94,28 +120,45 @@ public final class RunComparator {
             long currentCorrelated = countSpikes(current, name, true);
 
             if (before == null) {
-                diffs.add(new RunnerDiff(name, 0, after.p99Nanos(), 0, Verdict.NEW,
+                diffs.add(new RunnerDiff(name, 0, after.p99Nanos(), 0, 0, after.p50Nanos(),
+                        Verdict.NEW, 0, after.count(), Verdict.NEW,
                         baselineSpikes, currentSpikes, baselineCorrelated, currentCorrelated));
                 continue;
             }
             if (after == null) {
-                diffs.add(new RunnerDiff(name, before.p99Nanos(), 0, 0, Verdict.REMOVED,
+                diffs.add(new RunnerDiff(name, before.p99Nanos(), 0, 0, before.p50Nanos(), 0,
+                        Verdict.REMOVED, before.count(), 0, Verdict.REMOVED,
                         baselineSpikes, currentSpikes, baselineCorrelated, currentCorrelated));
                 continue;
             }
             if (before.p99Nanos() == 0 || after.p99Nanos() == 0) {
                 diffs.add(new RunnerDiff(name, before.p99Nanos(), after.p99Nanos(), 0,
-                        Verdict.NOT_COMPARABLE, baselineSpikes, currentSpikes,
-                        baselineCorrelated, currentCorrelated));
+                        before.p50Nanos(), after.p50Nanos(), Verdict.NOT_COMPARABLE,
+                        before.count(), after.count(), Verdict.NOT_COMPARABLE,
+                        baselineSpikes, currentSpikes, baselineCorrelated, currentCorrelated));
                 continue;
             }
             long delta = after.p99Nanos() - before.p99Nanos();
             double change = (double) delta / before.p99Nanos();
+
+            long p50Delta = after.p50Nanos() - before.p50Nanos();
+            double p50Change = before.p50Nanos() == 0 ? 0 : (double) p50Delta / before.p50Nanos();
             diffs.add(new RunnerDiff(name, before.p99Nanos(), after.p99Nanos(), change,
+                    before.p50Nanos(), after.p50Nanos(),
+                    verdictFor(p50Delta, p50Change, budgetNanos, current.percentilePrecision()),
+                    before.count(), after.count(),
                     verdictFor(delta, change, budgetNanos, current.percentilePrecision()),
                     baselineSpikes, currentSpikes, baselineCorrelated, currentCorrelated));
         }
-        return new Comparison(diffs, budgetNanos, warnings, pairSpikes(baseline, current, names));
+        for (RunnerDiff diff : diffs) {
+            if (diff.throughputDiverged()) {
+                warnings.add(("%s did %s operations vs %s — a run that shed load can post a better "
+                        + "p99 while being worse")
+                        .formatted(diff.name(), diff.currentCount(), diff.baselineCount()));
+            }
+        }
+        return new Comparison(diffs, budgetNanos, warnings,
+                pairSpikes(baseline, current, names), failOnFindings);
     }
 
     private static List<SpikePair> pairSpikes(RunReport baseline, RunReport current, Set<String> names) {

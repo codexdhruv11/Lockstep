@@ -61,4 +61,18 @@ final class DurationsTest {
             assertThat(Durations.parseToNanos(Durations.formatNanos(nanos))).as("nanos %d", nanos).isEqualTo(nanos);
         }
     }
+
+    @Test
+    void latencyFormattingDoesNotStrandAValueInTheWrongUnit() {
+        assertThat(com.lockstep.util.Numbers.latency(999_600L)).isEqualTo("1ms");
+        assertThat(com.lockstep.util.Numbers.latency(999_600_000L)).isEqualTo("1s");
+        assertThat(com.lockstep.util.Numbers.latency(1_000_000L)).isEqualTo("1ms");
+        assertThat(com.lockstep.util.Numbers.latency(45_000_000L)).isEqualTo("45ms");
+        assertThat(com.lockstep.util.Numbers.latency(500L)).isEqualTo("500ns");
+    }
+
+    @Test
+    void aNegativeLatencyKeepsItsUnitInsteadOfFallingBackToNanoseconds() {
+        assertThat(com.lockstep.util.Numbers.latency(-5_000_000L)).isEqualTo("-5ms");
+    }
 }

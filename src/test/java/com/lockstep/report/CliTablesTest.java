@@ -17,7 +17,7 @@ final class CliTablesTest {
     private static final long SECOND = 1_000_000_000L;
 
     private static RunCoordinator.RunResult resultWith(Map<String, PacedLoop.LoopResult> runners) {
-        RunContext context = new RunContext(0, Instant.EPOCH, 10 * SECOND, SECOND, 3 * SECOND, 10);
+        RunContext context = new RunContext(0, Instant.EPOCH, 10 * SECOND, SECOND, 3 * SECOND, 10, 0);
         return new RunCoordinator.RunResult(context, runners, null);
     }
 

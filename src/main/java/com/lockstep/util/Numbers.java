@@ -10,16 +10,30 @@ public final class Numbers {
     }
 
     public static String latency(long nanos) {
+        if (nanos < 0) {
+            return "-" + latency(-nanos);
+        }
+
         if (nanos < 1_000L) {
             return nanos + "ns";
         }
-        if (nanos < 1_000_000L) {
+        if (nanos < 1_000_000L && roundsBelowAThousand(nanos / 1_000.0)) {
             return trim(nanos / 1_000.0) + "µs";
         }
-        if (nanos < 1_000_000_000L) {
+        if (nanos < 1_000_000_000L && roundsBelowAThousand(nanos / 1_000_000.0)) {
             return trim(nanos / 1_000_000.0) + "ms";
         }
+        if (nanos < 1_000_000L) {
+            return trim(nanos / 1_000_000.0) + "ms";
+        }
+        if (nanos < 1_000_000_000L) {
+            return trim(nanos / 1_000_000_000.0) + "s";
+        }
         return trim(nanos / 1_000_000_000.0) + "s";
+    }
+
+    private static boolean roundsBelowAThousand(double value) {
+        return Double.parseDouble(String.format(Locale.ROOT, value >= 100 ? "%.0f" : "%.1f", value)) < 1000;
     }
 
     public static String rate(double perSecond) {

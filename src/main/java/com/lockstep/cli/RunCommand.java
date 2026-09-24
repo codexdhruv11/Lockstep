@@ -46,6 +46,11 @@ public final class RunCommand implements Callable<Integer> {
     @Option(names = "--concurrency", description = "Override the config's worker count.")
     Integer concurrency;
 
+    @Option(names = "--warmup", description =
+            "Ignore findings from this opening window, e.g. 5s. The JVM compiles itself during a "
+            + "run's first moments; those buckets are still printed, just not treated as findings.")
+    String warmup;
+
     @Option(names = "--buckets", description = "Print the per-bucket table for each runner.")
     boolean showBuckets;
 
@@ -77,6 +82,7 @@ public final class RunCommand implements Callable<Integer> {
 
         Config config;
         SpikeCorrelator.Thresholds thresholds;
+        long warmupNanos;
         try {
             if (!Files.exists(configPath)) {
                 err.println(Ansi.error("config file not found: " + configPath));
@@ -85,6 +91,11 @@ public final class RunCommand implements Callable<Integer> {
             config = applyOverrides(ConfigLoader.load(configPath));
 
             thresholds = thresholds();
+            warmupNanos = warmupNanos();
+            if (warmupNanos >= config.duration()) {
+                throw new ConfigValidationException("warmup",
+                        "warmup must be shorter than the run's duration");
+            }
         } catch (ConfigValidationException e) {
             err.println(Ansi.error(e.getMessage()));
             return EXIT_CONFIG_ERROR;
@@ -137,16 +148,21 @@ public final class RunCommand implements Callable<Integer> {
         CapacityFinder.Capacity capacity = appTimeline.isEmpty()
                 ? CapacityFinder.Capacity.notUsable(result.context().concurrency())
                 : CapacityFinder.find(appTimeline, result.context().concurrency(),
-                        result.context().rampNanos(), result.context().bucketWidthNanos());
+                        result.context().rampNanos(), result.context().bucketWidthNanos(),
+                        warmupNanos);
         if (!appTimeline.isEmpty()) {
             out.println();
-            out.print(CliTables.capacityLine(capacity));
+            out.print(CliTables.capacityLine(capacity, warmupNanos));
         }
 
         Map<String, List<com.lockstep.stats.Bucket>> storageTimelines =
                 SpikeCorrelator.storageTimelinesOf(result);
         SpikeCorrelator.CorrelationResult correlation =
-                SpikeCorrelator.correlate(appTimeline, storageTimelines, thresholds);
+                SpikeCorrelator.correlate(appTimeline, storageTimelines, thresholds, warmupNanos);
+        if (warmupNanos > 0) {
+            out.println();
+            out.println(CliTables.warmupNote(warmupNanos));
+        }
 
         boolean hasStorage = !storageTimelines.isEmpty();
         if (hasStorage) {
@@ -179,6 +195,10 @@ public final class RunCommand implements Callable<Integer> {
                 httpThreshold == null ? defaults.httpNanos() : Durations.parseToNanos(httpThreshold),
                 dbThreshold == null ? defaults.dbNanos() : Durations.parseToNanos(dbThreshold),
                 redisThreshold == null ? defaults.redisNanos() : Durations.parseToNanos(redisThreshold));
+    }
+
+    private long warmupNanos() {
+        return warmup == null ? 0 : Durations.parseToNanos(warmup);
     }
 
     private Config applyOverrides(Config config) {

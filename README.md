@@ -115,10 +115,12 @@ budget is how much extra waiting a user tolerates, so 5ms→40ms passes and 900m
 
 ```
 lockstep run [-c config.yaml] [--duration 30s] [--ramp 10s] [--concurrency 50]
+                [--warmup 5s]
                 [--http-threshold 150ms] [--db-threshold 250ms] [--redis-threshold 80ms]
                 [--json results.json] [--report report.html] [--no-report] [--buckets]
                 [--no-progress]
 lockstep compare -b baseline.json -c current.json [--fail-on 100ms] [--report compare.html]
+                    [--no-fail-on-findings]
 lockstep demo-server [--port 8080]
 lockstep seed-db --conn postgres://user:pw@localhost:5432/db [--driver postgres] [-n 1000000]
 lockstep version
@@ -152,6 +154,7 @@ db:
   target:
     driver: postgres
     conn: postgres://user:pw@localhost:5432/mydb?sslmode=disable
+    pool_size: 10       # optional; defaults to the run's concurrency
     queries:
       - query: SELECT count(*) FROM orders
         weight: 20
@@ -193,15 +196,28 @@ These are design decisions, not caveats buried in a footnote:
 - **Memory is bounded by bucket count, not request count.** Samples fold into histograms and are
   dropped; 10,000 and 10,000,000 observations cost the same.
 
+### Warm-up
+
+A run's opening moments measure the JVM compiling itself, not your system — latencies there can
+be an order of magnitude above the steady state. `--warmup 5s` excludes that window from the
+findings:
+
+```sh
+lockstep run -c config.yaml --warmup 5s
+```
+
+Those buckets are still measured and still printed. They are labelled and left out of the spike
+list and the capacity baseline, because deleting data to make a report look tidy is the opposite
+of what this tool is for.
+
 ## Known limitations
 
-- **JVM warm-up distorts the first bucket** of short runs. The first operations pay for JIT
-  compilation, which can show up as a spike that describes lockstep rather than your system.
-  There is no `--warmup` flag yet.
 - Load comes from **one process on one machine**. No distributed generation.
 - No WebSocket or streaming load, no browser, no cookie jar for scenarios (token capture only).
-- `compare` diffs p99 only, and does not compare per-step figures or throughput.
+- `compare` diffs p50 and p99 and flags diverging throughput, but does not compare per-step
+  figures.
 - Thresholds are absolute cut-offs; nothing adapts to what is normal for your target.
+- Without `--warmup`, a short run's first bucket can still produce a finding about the JVM.
 
 ## Build
 
@@ -209,7 +225,7 @@ Requires **Java 21** (virtual threads) and Maven.
 
 ```sh
 mvn clean package            # target/lockstep.jar
-mvn clean verify             # 217 tests; Postgres and Redis tests need Docker
+mvn clean verify             # 243 tests; Postgres and Redis tests need Docker
 ```
 
 Tests that need Docker skip themselves by name when it is unavailable, rather than passing

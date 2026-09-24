@@ -38,7 +38,7 @@ final class HtmlReportTest {
         runners.put("http", new PacedLoop.LoopResult(http.snapshot(), 220, 20, 0, 2, 5 * MS, 220, true));
         runners.put("db", new PacedLoop.LoopResult(db.snapshot(), 200, 0, 0, 0, 0, 200, true));
         return new RunCoordinator.RunResult(
-                new RunContext(0, Instant.parse("2026-09-24T10:15:30Z"), 4 * SECOND, SECOND, SECOND, 8),
+                new RunContext(0, Instant.parse("2026-09-24T10:15:30Z"), 4 * SECOND, SECOND, SECOND, 8, 0),
                 runners, null);
     }
 
@@ -102,7 +102,7 @@ final class HtmlReportTest {
         Map<String, PacedLoop.LoopResult> runners = new LinkedHashMap<>();
         runners.put("http", new PacedLoop.LoopResult(http.snapshot(), 1, 0, 0, 0, 0, 1, true));
         var result = new RunCoordinator.RunResult(
-                new RunContext(0, Instant.EPOCH, 2 * SECOND, SECOND, 0, 4), runners, null);
+                new RunContext(0, Instant.EPOCH, 2 * SECOND, SECOND, 0, 4, 0), runners, null);
 
         String html = HtmlReport.render(RunReport.from(result, "t"));
 

@@ -96,7 +96,7 @@ final class HtmlReportRenderingTest {
             runners.put("db", new PacedLoop.LoopResult(db.snapshot(), 160, 0, 0, 0, 0, 160, true));
         }
         return new RunCoordinator.RunResult(
-                new RunContext(0, Instant.parse("2026-09-24T10:00:00Z"), 4 * SECOND, SECOND, 0, 8),
+                new RunContext(0, Instant.parse("2026-09-24T10:00:00Z"), 4 * SECOND, SECOND, 0, 8, 0),
                 runners, null);
     }
 
@@ -157,7 +157,7 @@ final class HtmlReportRenderingTest {
         }
         runners.put("http", new PacedLoop.LoopResult(http.snapshot(), 100, 60, 0, 5, 20 * MS, 100, true));
         var result = new RunCoordinator.RunResult(
-                new RunContext(0, Instant.EPOCH, 4 * SECOND, SECOND, 0, 8), runners, null);
+                new RunContext(0, Instant.EPOCH, 4 * SECOND, SECOND, 0, 8, 0), runners, null);
 
         Rendered page = render(RunReport.from(result, "t"));
 
