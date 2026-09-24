@@ -32,7 +32,9 @@ public final class CompareHtmlReport {
         } catch (IOException e) {
             throw new UncheckedIOException("could not serialise the comparison", e);
         }
-        return template().replace("__DATA__", escapeForScriptTag(json));
+        return template()
+                .replace("__LATENCY_FORMATTER__", com.lockstep.report.HtmlReport.LATENCY_FORMATTER_JS)
+                .replace("__DATA__", escapeForScriptTag(json));
     }
 
     public static void write(RunComparator.Comparison comparison, String baselineLabel,

@@ -59,7 +59,10 @@ public final class CapacityFinder {
         for (int i = 0; i + SUSTAINED_BUCKETS - 1 < populated.size(); i++) {
             boolean sustained = true;
             for (int offset = 0; offset < SUSTAINED_BUCKETS; offset++) {
-                if (populated.get(i + offset).p99Nanos() < strainLevel) {
+                Bucket candidate = populated.get(i + offset);
+
+                if (candidate.index() != populated.get(i).index() + offset
+                        || candidate.p99Nanos() < strainLevel) {
                     sustained = false;
                     break;
                 }

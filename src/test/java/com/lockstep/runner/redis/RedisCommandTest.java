@@ -21,6 +21,15 @@ final class RedisCommandTest {
     }
 
     @Test
+    void quotesInsideAnUnquotedValueAreOrdinaryText() {
+        assertThat(RedisCommand.parse("SET k {\"a\":1}").args()).containsExactly("k", "{\"a\":1}");
+        assertThat(RedisCommand.parse("SET k don't").args()).containsExactly("k", "don't");
+        assertThat(RedisCommand.parse("HSET h f \"v\" g 'w'").args())
+                .containsExactly("h", "f", "v", "g", "w");
+        assertThat(RedisCommand.parse("SET k a\"b").args()).containsExactly("k", "a\"b");
+    }
+
+    @Test
     void quotedArgumentsStayWhole() {
         assertThat(RedisCommand.parse("SET greeting \"hello world\"").args())
                 .containsExactly("greeting", "hello world");

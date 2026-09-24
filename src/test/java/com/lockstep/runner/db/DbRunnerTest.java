@@ -96,12 +96,14 @@ final class DbRunnerTest {
         createTable(file);
 
         DbConfig config = sqliteConfig(List.of(
-                new QuerySpec("SELECT count(*) FROM orders", 1, "write", null)), 20);
+                new QuerySpec("INSERT INTO orders (customer, amount) VALUES ('typed', 1)", 1, "read", null)), 20);
 
-        try (DbRunner runner = DbRunner.create(config, 2)) {
-            PacedLoop.LoopResult result = runner.run(RunContext.startingNow(400 * MS, 100 * MS, 0, 2));
+        try (DbRunner runner = DbRunner.create(config, 1)) {
+            PacedLoop.LoopResult result = runner.run(RunContext.startingNow(400 * MS, 100 * MS, 0, 1));
             assertThat(result.executedCount()).isGreaterThan(0);
             assertThat(result.series().errorCount()).isEqualTo(result.executedCount());
+
+            assertThat(rowCount(file)).isEqualTo(1);
         }
     }
 
@@ -168,15 +170,38 @@ final class DbRunnerTest {
         createTable(file);
 
         DbConfig config = sqliteConfig(List.of(
-                new QuerySpec("SELECT count(*) FROM orders", 1, "read", null)), 40);
+                new QuerySpec("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 200000)"
+                        + " SELECT count(*) FROM c", 1, "read", null)), 40);
 
-        try (DbRunner runner = DbRunner.create(config, 2)) {
-            PacedLoop.LoopResult result = runner.run(RunContext.startingNow(500 * MS, 100 * MS, 0, 2));
+        try (DbRunner runner = DbRunner.create(config, 1)) {
+            PacedLoop.LoopResult result = runner.run(RunContext.startingNow(2 * SECOND(), 200 * MS, 0, 8));
+
+            assertThat(result.executedCount()).isGreaterThan(2);
+            assertThat(runner.maxConnectionWaitNanos())
+                    .withFailMessage("a starved pool must record a real wait, got %d",
+                            runner.maxConnectionWaitNanos())
+                    .isGreaterThan(MS);
+            assertThat(runner.meanConnectionWaitNanos()).isGreaterThan(0);
+        }
+    }
+
+    @Test
+    void anUntypedWriteThatReturnsRowsIsNotRecordedAsAFailure() throws Exception {
+        String file = tempDir.resolve("load.db").toString();
+        createTable(file);
+
+        DbConfig config = sqliteConfig(List.of(new QuerySpec(
+                "INSERT INTO orders (customer, amount) VALUES ('load', 1) RETURNING id",
+                1, null, null)), 20);
+
+        try (DbRunner runner = DbRunner.create(config, 1)) {
+            PacedLoop.LoopResult result = runner.run(RunContext.startingNow(500 * MS, 100 * MS, 0, 1));
+
             assertThat(result.executedCount()).isGreaterThan(0);
-
-            assertThat(runner.maxConnectionWaitNanos()).isGreaterThanOrEqualTo(0);
-            assertThat(runner.meanConnectionWaitNanos(result.executedCount()))
-                    .isLessThan(result.series().summarize("db", 500 * MS).p99Nanos() + 1);
+            assertThat(result.series().errorCount())
+                    .withFailMessage("a healthy RETURNING write must not read as a target failure")
+                    .isZero();
+            assertThat(rowCount(file)).isGreaterThan(1);
         }
     }
 

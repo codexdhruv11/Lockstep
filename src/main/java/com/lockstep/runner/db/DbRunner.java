@@ -24,6 +24,7 @@ public final class DbRunner implements Runner {
     private final QueryPicker picker;
     private final int rate;
     private final LongAdder connectionWaitNanos = new LongAdder();
+    private final LongAdder connectionAttempts = new LongAdder();
     private final AtomicLong maxConnectionWaitNanos = new AtomicLong();
 
     private DbRunner(HikariDataSource dataSource, QueryPicker picker, int rate) {
@@ -72,11 +73,7 @@ public final class DbRunner implements Runner {
     private Operation.Outcome executeOne() {
         QuerySpec query = picker.pick();
         long beforeAcquire = System.nanoTime();
-        try (Connection connection = dataSource.getConnection()) {
-            long waited = System.nanoTime() - beforeAcquire;
-            connectionWaitNanos.add(waited);
-            maxConnectionWaitNanos.accumulateAndGet(waited, Math::max);
-
+        try (Connection connection = acquire(beforeAcquire)) {
             try (PreparedStatement statement = connection.prepareStatement(query.query())) {
                 statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
                 bindArgs(statement, query.args());
@@ -86,12 +83,29 @@ public final class DbRunner implements Runner {
                         }
                     }
                 } else {
-                    statement.executeUpdate();
+                    boolean hasResultSet = statement.execute();
+                    if (hasResultSet) {
+                        try (ResultSet rows = statement.getResultSet()) {
+                            while (rows.next()) {
+                            }
+                        }
+                    }
                 }
             }
             return Operation.Outcome.OK;
         } catch (Exception e) {
             return Operation.Outcome.failed(describe(e));
+        }
+    }
+
+    private Connection acquire(long beforeAcquire) throws java.sql.SQLException {
+        try {
+            return dataSource.getConnection();
+        } finally {
+            long waited = System.nanoTime() - beforeAcquire;
+            connectionAttempts.increment();
+            connectionWaitNanos.add(waited);
+            maxConnectionWaitNanos.accumulateAndGet(waited, Math::max);
         }
     }
 
@@ -109,8 +123,9 @@ public final class DbRunner implements Runner {
         return e.getClass().getSimpleName() + (message == null ? "" : ": " + message);
     }
 
-    public long meanConnectionWaitNanos(long operations) {
-        return operations <= 0 ? 0 : connectionWaitNanos.sum() / operations;
+    public long meanConnectionWaitNanos() {
+        long attempts = connectionAttempts.sum();
+        return attempts <= 0 ? 0 : connectionWaitNanos.sum() / attempts;
     }
 
     public long maxConnectionWaitNanos() {

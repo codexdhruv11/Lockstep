@@ -176,7 +176,7 @@ final class SpikeCorrelatorTest {
         HistogramRecorder recorder = new HistogramRecorder(SECOND, 2);
         recorder.record(0, 900 * MS, 900 * MS, true, null);
         Map<String, PacedLoop.LoopResult> runners = new LinkedHashMap<>();
-        runners.put("db", new PacedLoop.LoopResult(recorder.snapshot(), 1, 0, 0, 0, 1, true));
+        runners.put("db", new PacedLoop.LoopResult(recorder.snapshot(), 1, 0, 0, 0, 0, 1, true));
         var result = new RunCoordinator.RunResult(
                 new RunContext(0, Instant.EPOCH, 2 * SECOND, SECOND, 0, 4), runners, null);
 
@@ -202,8 +202,8 @@ final class SpikeCorrelatorTest {
         Map<String, PacedLoop.LoopResult> runners = new LinkedHashMap<>();
         BucketSeries httpSeries = http.snapshot();
         BucketSeries dbSeries = db.snapshot();
-        runners.put("http", new PacedLoop.LoopResult(httpSeries, 200, 0, 0, 0, 200, true));
-        runners.put("db", new PacedLoop.LoopResult(dbSeries, 200, 0, 0, 0, 200, true));
+        runners.put("http", new PacedLoop.LoopResult(httpSeries, 200, 0, 0, 0, 0, 200, true));
+        runners.put("db", new PacedLoop.LoopResult(dbSeries, 200, 0, 0, 0, 0, 200, true));
         var result = new RunCoordinator.RunResult(
                 new RunContext(0, Instant.EPOCH, 4 * SECOND, SECOND, 0, 8), runners, null);
 

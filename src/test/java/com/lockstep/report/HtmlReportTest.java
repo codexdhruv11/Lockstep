@@ -35,8 +35,8 @@ final class HtmlReportTest {
             }
         }
         Map<String, PacedLoop.LoopResult> runners = new LinkedHashMap<>();
-        runners.put("http", new PacedLoop.LoopResult(http.snapshot(), 220, 20, 2, 5 * MS, 220, true));
-        runners.put("db", new PacedLoop.LoopResult(db.snapshot(), 200, 0, 0, 0, 200, true));
+        runners.put("http", new PacedLoop.LoopResult(http.snapshot(), 220, 20, 0, 2, 5 * MS, 220, true));
+        runners.put("db", new PacedLoop.LoopResult(db.snapshot(), 200, 0, 0, 0, 0, 200, true));
         return new RunCoordinator.RunResult(
                 new RunContext(0, Instant.parse("2026-09-24T10:15:30Z"), 4 * SECOND, SECOND, SECOND, 8),
                 runners, null);
@@ -100,7 +100,7 @@ final class HtmlReportTest {
         HistogramRecorder http = new HistogramRecorder(SECOND, 2);
         http.record(0, 10 * MS, 10 * MS, true, 200);
         Map<String, PacedLoop.LoopResult> runners = new LinkedHashMap<>();
-        runners.put("http", new PacedLoop.LoopResult(http.snapshot(), 1, 0, 0, 0, 1, true));
+        runners.put("http", new PacedLoop.LoopResult(http.snapshot(), 1, 0, 0, 0, 0, 1, true));
         var result = new RunCoordinator.RunResult(
                 new RunContext(0, Instant.EPOCH, 2 * SECOND, SECOND, 0, 4), runners, null);
 

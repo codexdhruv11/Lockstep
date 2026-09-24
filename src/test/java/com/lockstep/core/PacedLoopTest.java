@@ -15,6 +15,10 @@ final class PacedLoopTest {
         return RunContext.startingNow(durationNanos, 200 * MS, rampNanos, concurrency);
     }
 
+    private static RunContext readyContext(long durationNanos, long rampNanos, int concurrency) {
+        return RunContext.startingAfterSetup(durationNanos, 200 * MS, rampNanos, concurrency);
+    }
+
     @Test
     void firesRoughlyTheConfiguredNumberOfOperations() {
         LongAdder executed = new LongAdder();
@@ -129,23 +133,61 @@ final class PacedLoopTest {
     }
 
     @Test
-    void inFlightWorkIsDrainedBeforeTheResultIsReturned() {
+    void aRealBacklogIsDrainedRatherThanDiscarded() {
         LongAdder completed = new LongAdder();
-        PacedLoop.LoopResult result = PacedLoop.run(context(300 * MS, 0, 50), 20, scheduledOffset -> {
-            Thread.sleep(200);
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 1), 40, scheduledOffset -> {
+            Thread.sleep(100);
             completed.increment();
             return Operation.Outcome.OK;
         });
 
         assertThat(result.drainedCleanly()).isTrue();
-
         assertThat(result.executedCount()).isEqualTo(completed.sum());
-        assertThat(result.executedCount()).isGreaterThan(0);
+
+        assertThat(result.executedCount()).isGreaterThan(11);
+        assertThat(result.accountsForEveryScheduledOperation()).isTrue();
+    }
+
+    @Test
+    void latenessIsActuallyDetectedNotJustReportedAsZero() {
+        RunContext late = RunContext.startingNow(SECOND, 200 * MS, 0, 4);
+        try {
+            Thread.sleep(300);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        PacedLoop.LoopResult result = PacedLoop.run(late, 100, scheduledOffset -> Operation.Outcome.OK);
+
+        assertThat(result.lateFireCount()).isGreaterThan(10);
+        assertThat(result.maxLatenessNanos()).isGreaterThan(100 * MS);
+        assertThat(result.fellShort()).isTrue();
+    }
+
+    @Test
+    void everyScheduledOperationIsAccountedForUnderOverload() {
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 1), 100, scheduledOffset -> {
+            Thread.sleep(80);
+            return Operation.Outcome.OK;
+        });
+
+        assertThat(result.accountsForEveryScheduledOperation()).isTrue();
+        assertThat(result.scheduledCount()).isEqualTo(result.expectedHits());
+    }
+
+    @Test
+    void aScheduleThatNeverDeliveredIsNotReportedAsHealthy() {
+        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 4), 1,
+                scheduledOffset -> Operation.Outcome.OK);
+
+        assertThat(result.scheduledCount()).isEqualTo(1);
+        assertThat(result.executedCount()).isEqualTo(1);
+        assertThat(result.expectedHits()).isEqualTo(1);
     }
 
     @Test
     void routineSchedulerOvershootIsNotReportedAsFallingShort() {
-        PacedLoop.LoopResult result = PacedLoop.run(context(SECOND, 0, 20), 50,
+        PacedLoop.LoopResult result = PacedLoop.run(readyContext(SECOND, 0, 20), 50,
                 scheduledOffset -> Operation.Outcome.OK);
 
         assertThat(result.executedCount()).isEqualTo(result.scheduledCount());

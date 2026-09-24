@@ -18,7 +18,9 @@ public final class RunComparator {
 
         NEW,
 
-        REMOVED
+        REMOVED,
+
+        NOT_COMPARABLE
     }
 
     public record RunnerDiff(
@@ -101,8 +103,14 @@ public final class RunComparator {
                         baselineSpikes, currentSpikes, baselineCorrelated, currentCorrelated));
                 continue;
             }
+            if (before.p99Nanos() == 0 || after.p99Nanos() == 0) {
+                diffs.add(new RunnerDiff(name, before.p99Nanos(), after.p99Nanos(), 0,
+                        Verdict.NOT_COMPARABLE, baselineSpikes, currentSpikes,
+                        baselineCorrelated, currentCorrelated));
+                continue;
+            }
             long delta = after.p99Nanos() - before.p99Nanos();
-            double change = before.p99Nanos() == 0 ? 0 : (double) delta / before.p99Nanos();
+            double change = (double) delta / before.p99Nanos();
             diffs.add(new RunnerDiff(name, before.p99Nanos(), after.p99Nanos(), change,
                     verdictFor(delta, change, budgetNanos, current.percentilePrecision()),
                     baselineSpikes, currentSpikes, baselineCorrelated, currentCorrelated));

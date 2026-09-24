@@ -29,7 +29,7 @@ final class CliTablesTest {
             recorder.record((i % 10) * SECOND, latencyNanos, latencyNanos, success, success ? 200 : 500);
         }
         BucketSeries series = recorder.snapshot();
-        return new PacedLoop.LoopResult(series, scheduled, shed, late, late > 0 ? 5 * MS : 0, scheduled, true);
+        return new PacedLoop.LoopResult(series, scheduled, shed, 0, late, late > 0 ? 5 * MS : 0, scheduled, true);
     }
 
     @Test
@@ -77,7 +77,8 @@ final class CliTablesTest {
         runners.put("db", loop(60, 0, MS, 100, 40, 3));
 
         String notes = CliTables.shortfallNotes(resultWith(runners));
-        assertThat(notes).contains("db").contains("60 of 100 scheduled")
+
+        assertThat(notes).contains("db").contains("60 of 100 expected")
                 .contains("40 shed").contains("3 fired late");
     }
 

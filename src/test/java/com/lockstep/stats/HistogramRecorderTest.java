@@ -88,20 +88,35 @@ final class HistogramRecorderTest {
     @Test
     void memoryIsBoundedByBucketCountNotObservationCount() {
         HistogramRecorder small = new HistogramRecorder(SECOND, 60);
-        HistogramRecorder large = new HistogramRecorder(SECOND, 60);
-
         recordSpread(small, 10_000);
-        recordSpread(large, 10_000_000);
+        long smallHeap = retainedHeapOf(small);
 
-        long smallFootprint = small.estimatedFootprintBytes();
-        long largeFootprint = large.estimatedFootprintBytes();
+        HistogramRecorder large = new HistogramRecorder(SECOND, 60);
+        recordSpread(large, 10_000_000);
+        long largeHeap = retainedHeapOf(large);
 
         assertThat(large.snapshot().totalCount()).isEqualTo(10_000_000);
         assertThat(small.snapshot().totalCount()).isEqualTo(10_000);
 
-        assertThat(largeFootprint).isLessThan((long) (smallFootprint * 1.1));
+        assertThat(largeHeap - smallHeap).isLessThan(32L * 1024 * 1024);
+        assertThat(large.estimatedFootprintBytes())
+                .isLessThan((long) (small.estimatedFootprintBytes() * 1.1));
+    }
 
-        assertThat(largeFootprint).isLessThan(16L * 1024 * 1024);
+    private static long retainedHeapOf(HistogramRecorder recorder) {
+        Runtime runtime = Runtime.getRuntime();
+        for (int attempt = 0; attempt < 4; attempt++) {
+            System.gc();
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        long used = runtime.totalMemory() - runtime.freeMemory();
+
+        assertThat(recorder.snapshot().totalCount()).isNotNegative();
+        return used;
     }
 
     private static void recordSpread(HistogramRecorder recorder, int operations) {

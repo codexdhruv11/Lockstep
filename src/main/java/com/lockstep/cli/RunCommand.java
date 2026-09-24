@@ -76,12 +76,15 @@ public final class RunCommand implements Callable<Integer> {
         PrintWriter err = spec.commandLine().getErr();
 
         Config config;
+        SpikeCorrelator.Thresholds thresholds;
         try {
             if (!Files.exists(configPath)) {
                 err.println(Ansi.error("config file not found: " + configPath));
                 return EXIT_CONFIG_ERROR;
             }
             config = applyOverrides(ConfigLoader.load(configPath));
+
+            thresholds = thresholds();
         } catch (ConfigValidationException e) {
             err.println(Ansi.error(e.getMessage()));
             return EXIT_CONFIG_ERROR;
@@ -120,10 +123,7 @@ public final class RunCommand implements Callable<Integer> {
             });
         }
 
-        var appLoop = result.byRunner().get("http");
-        List<com.lockstep.stats.Bucket> appTimeline = appLoop != null
-                ? appLoop.series().buckets()
-                : (result.scenarioRunner() == null ? List.of() : result.scenarioRunner().appTimeline());
+        List<com.lockstep.stats.Bucket> appTimeline = SpikeCorrelator.appTimelineOf(result);
 
         if (result.scenarioRunner() != null) {
             String steps = CliTables.stepTable(result.scenarioRunner().stepSeries(),
@@ -143,14 +143,10 @@ public final class RunCommand implements Callable<Integer> {
             out.print(CliTables.capacityLine(capacity));
         }
 
-        Map<String, List<com.lockstep.stats.Bucket>> storageTimelines = new java.util.LinkedHashMap<>();
-        result.byRunner().forEach((name, loop) -> {
-            if ("db".equals(name) || "redis".equals(name)) {
-                storageTimelines.put(name, loop.series().buckets());
-            }
-        });
+        Map<String, List<com.lockstep.stats.Bucket>> storageTimelines =
+                SpikeCorrelator.storageTimelinesOf(result);
         SpikeCorrelator.CorrelationResult correlation =
-                SpikeCorrelator.correlate(appTimeline, storageTimelines, thresholds());
+                SpikeCorrelator.correlate(appTimeline, storageTimelines, thresholds);
 
         boolean hasStorage = !storageTimelines.isEmpty();
         if (hasStorage) {

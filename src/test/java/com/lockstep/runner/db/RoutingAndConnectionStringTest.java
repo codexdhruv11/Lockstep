@@ -74,6 +74,31 @@ final class RoutingAndConnectionStringTest {
     }
 
     @Test
+    void aPasswordContainingAnAtSignDoesNotSilentlyRepointAtLocalhost() {
+        var target = ConnectionStrings.toJdbc("postgres://user:p@ss@host:5432/db", "postgres");
+
+        assertThat(target.url()).isEqualTo("jdbc:postgresql://host:5432/db");
+        assertThat(target.username()).isEqualTo("user");
+        assertThat(target.password()).isEqualTo("p@ss");
+    }
+
+    @Test
+    void theGoMysqlDsnIsTranslatedRatherThanDegradedToLocalhost() {
+        var target = ConnectionStrings.toJdbc("user:pass@tcp(127.0.0.1:3306)/dbname", "mysql");
+
+        assertThat(target.url()).isEqualTo("jdbc:mysql://127.0.0.1:3306/dbname");
+        assertThat(target.username()).isEqualTo("user");
+        assertThat(target.password()).isEqualTo("pass");
+    }
+
+    @Test
+    void aConnectionStringWithNoHostFailsLoudly() {
+        assertThatThrownBy(() -> ConnectionStrings.toJdbc("postgres:///db", "postgres"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no host");
+    }
+
+    @Test
     void anExplicitJdbcUrlIsPassedThroughUntouched() {
         var target = ConnectionStrings.toJdbc("jdbc:postgresql://host/db?ssl=true", "postgres");
         assertThat(target.url()).isEqualTo("jdbc:postgresql://host/db?ssl=true");

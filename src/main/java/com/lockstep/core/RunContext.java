@@ -28,9 +28,18 @@ public record RunContext(
         }
     }
 
+    public static final long SETUP_GRACE_NANOS = 250_000_000L;
+
     public static RunContext startingNow(long durationNanos, long bucketWidthNanos,
             long rampNanos, int concurrency) {
         return new RunContext(System.nanoTime(), Instant.now(),
+                durationNanos, bucketWidthNanos, rampNanos, concurrency);
+    }
+
+    public static RunContext startingAfterSetup(long durationNanos, long bucketWidthNanos,
+            long rampNanos, int concurrency) {
+        return new RunContext(System.nanoTime() + SETUP_GRACE_NANOS,
+                Instant.now().plusNanos(SETUP_GRACE_NANOS),
                 durationNanos, bucketWidthNanos, rampNanos, concurrency);
     }
 

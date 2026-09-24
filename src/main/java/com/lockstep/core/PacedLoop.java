@@ -17,6 +17,8 @@ public final class PacedLoop {
 
     private static final long DRAIN_TIMEOUT_SECONDS = 30;
 
+    private static final long ABANDON_GRACE_SECONDS = 2;
+
     private static final long MIN_LATENESS_TOLERANCE_NANOS = 1_000_000L;
 
     private PacedLoop() {}
@@ -35,14 +37,16 @@ public final class PacedLoop {
         BlockingQueue<Long> queue = new ArrayBlockingQueue<>(workerCount * QUEUE_DEPTH_MULTIPLIER);
         AtomicBoolean accepting = new AtomicBoolean(true);
         LongAdder shed = new LongAdder();
+        LongAdder inFlight = new LongAdder();
         LongAdder lateFires = new LongAdder();
         AtomicLong maxLatenessNanos = new AtomicLong();
         long scheduledCount = 0;
         long latenessTolerance = latenessToleranceNanos(ratePerSecond);
 
-        try (ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor()) {
+        ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
+        try {
             for (int i = 0; i < workerCount; i++) {
-                workers.submit(() -> drain(queue, accepting, recorder, operation, context, progress));
+                workers.submit(() -> drain(queue, accepting, recorder, operation, context, progress, inFlight));
             }
 
             for (long hit = 1; ; hit++) {
@@ -67,15 +71,19 @@ public final class PacedLoop {
             boolean drained = workers.awaitTermination(DRAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             if (!drained) {
                 workers.shutdownNow();
+
+                drained = workers.awaitTermination(ABANDON_GRACE_SECONDS, TimeUnit.SECONDS);
             }
-            long unprocessed = queue.size();
-            shed.add(unprocessed);
-            return new LoopResult(recorder.snapshot(), scheduledCount, shed.sum(),
+            shed.add(queue.size());
+
+            long abandoned = drained ? 0 : Math.max(0, inFlight.sum());
+            return new LoopResult(recorder.snapshot(), scheduledCount, shed.sum(), abandoned,
                     lateFires.sum(), maxLatenessNanos.get(),
                     pacer.expectedHits(context.durationNanos()), drained);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return new LoopResult(recorder.snapshot(), scheduledCount, shed.sum(),
+            workers.shutdownNow();
+            return new LoopResult(recorder.snapshot(), scheduledCount, shed.sum(), inFlight.sum(),
                     lateFires.sum(), maxLatenessNanos.get(),
                     pacer.expectedHits(context.durationNanos()), false);
         }
@@ -83,7 +91,7 @@ public final class PacedLoop {
 
     private static void drain(BlockingQueue<Long> queue, AtomicBoolean accepting,
             HistogramRecorder recorder, Operation operation, RunContext context,
-            RunProgress.Counter progress) {
+            RunProgress.Counter progress, LongAdder inFlight) {
         while (true) {
             Long scheduledOffset;
             try {
@@ -98,7 +106,12 @@ public final class PacedLoop {
                 }
                 continue;
             }
-            execute(recorder, operation, context, scheduledOffset, progress);
+            inFlight.increment();
+            try {
+                execute(recorder, operation, context, scheduledOffset, progress);
+            } finally {
+                inFlight.decrement();
+            }
         }
     }
 
@@ -143,6 +156,7 @@ public final class PacedLoop {
             BucketSeries series,
             long scheduledCount,
             long shedCount,
+            long abandonedCount,
             long lateFireCount,
             long maxLatenessNanos,
             long expectedHits,
@@ -152,7 +166,12 @@ public final class PacedLoop {
         }
 
         public boolean fellShort() {
-            return shedCount > 0 || lateFireCount > 0 || !drainedCleanly;
+            return shedCount > 0 || abandonedCount > 0 || lateFireCount > 0 || !drainedCleanly
+                    || scheduledCount < expectedHits;
+        }
+
+        public boolean accountsForEveryScheduledOperation() {
+            return executedCount() + shedCount + abandonedCount == scheduledCount;
         }
     }
 }

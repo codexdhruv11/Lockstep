@@ -11,6 +11,21 @@ import java.nio.file.StandardCopyOption;
 public final class HtmlReport {
     private static final String TEMPLATE_RESOURCE = "/report-template.html";
 
+    public static final String LATENCY_FORMATTER_JS = """
+        function ns(v) {
+          if (v === null || v === undefined) return "-";
+          if (v < 0) return "-" + ns(-v);
+          if (v < 1e3) return v + "ns";
+          if (v < 1e6) return trim(v / 1e3) + "\\u00b5s";
+          if (v < 1e9) return trim(v / 1e6) + "ms";
+          return trim(v / 1e9) + "s";
+          function trim(x) {
+            var s = x >= 100 ? x.toFixed(0) : x.toFixed(1);
+            return s.replace(/\\.0$/, "");
+          }
+        }
+        """;
+
     private HtmlReport() {}
 
     public static String render(RunReport report) {
@@ -18,6 +33,7 @@ public final class HtmlReport {
         String json = JsonExport.toJson(report);
         return template
                 .replace("__TITLE__", "lockstep · " + escapeHtml(report.startedAt()))
+                .replace("__LATENCY_FORMATTER__", LATENCY_FORMATTER_JS)
                 .replace("__DATA__", escapeForScriptTag(json));
     }
 

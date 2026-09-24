@@ -54,7 +54,7 @@ public record RedisCommand(String name, List<String> args) {
                 }
                 continue;
             }
-            if (c == '\'' || c == '"') {
+            if ((c == '\'' || c == '"') && !inToken) {
                 quote = c;
                 inToken = true;
                 continue;

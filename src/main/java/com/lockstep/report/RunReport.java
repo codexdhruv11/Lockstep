@@ -25,7 +25,8 @@ public record RunReport(
         List<RunnerReport> runners,
         List<SpikeReport> spikes,
         CapacityReport capacity,
-        List<StepReport> steps) {
+        List<StepReport> steps,
+        CorrelationContext correlation) {
     public static final int SCHEMA_VERSION = 1;
 
     public RunReport {
@@ -44,6 +45,9 @@ public record RunReport(
             long p95Nanos,
             long p99Nanos,
             long maxNanos) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record CorrelationContext(boolean appReferencePresent, boolean storageRunnersPresent) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CapacityReport(
@@ -77,6 +81,7 @@ public record RunReport(
             long scheduledCount,
             long expectedHits,
             long shedCount,
+            long abandonedCount,
             long lateFireCount,
             long maxLatenessNanos,
             boolean drainedCleanly,
@@ -110,6 +115,15 @@ public record RunReport(
 
     public static RunReport from(RunCoordinator.RunResult result, String toolVersion) {
         return from(result, toolVersion, null, null);
+    }
+
+    private static CorrelationContext correlationContext(RunCoordinator.RunResult result,
+            com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation) {
+        if (correlation == null) {
+            return null;
+        }
+        boolean storage = result.byRunner().containsKey("db") || result.byRunner().containsKey("redis");
+        return new CorrelationContext(correlation.appReferencePresent(), storage);
     }
 
     private static List<StepReport> stepReports(RunCoordinator.RunResult result) {
@@ -149,7 +163,8 @@ public record RunReport(
                 runners,
                 spikeReports(correlation),
                 capacityReport(capacity),
-                stepReports(result));
+                stepReports(result),
+                correlationContext(result, correlation));
     }
 
     private static CapacityReport capacityReport(
@@ -194,7 +209,8 @@ public record RunReport(
         return new RunnerReport(
                 name, summary.count(), summary.successCount(), summary.errorCount(),
                 summary.achievedRatePerSecond(), loop.scheduledCount(), loop.expectedHits(),
-                loop.shedCount(), loop.lateFireCount(), loop.maxLatenessNanos(), loop.drainedCleanly(),
+                loop.shedCount(), loop.abandonedCount(), loop.lateFireCount(),
+                loop.maxLatenessNanos(), loop.drainedCleanly(),
                 summary.meanNanos(), summary.p50Nanos(), summary.p95Nanos(), summary.p99Nanos(),
                 summary.maxNanos(), summary.serviceP99Nanos(), statuses, buckets);
     }

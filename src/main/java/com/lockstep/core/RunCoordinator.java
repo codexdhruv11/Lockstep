@@ -24,9 +24,10 @@ public final class RunCoordinator {
     }
 
     public static RunResult execute(Config config, RunProgress progress) {
-        RunContext context = RunContext.startingNow(
+        int concurrency = config.concurrency() <= 0 ? RunContext.DEFAULT_CONCURRENCY : config.concurrency();
+        List<Runner> runners = build(config, concurrency);
+        RunContext context = RunContext.startingAfterSetup(
                 config.duration(), config.bucketWidth(), config.ramp(), config.concurrency());
-        List<Runner> runners = build(config, context.concurrency());
         try {
             Map<String, PacedLoop.LoopResult> results = runAll(runners, context, progress);
             ScenarioRunner scenario = runners.stream()

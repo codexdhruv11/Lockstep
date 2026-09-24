@@ -51,12 +51,21 @@ public final class CliTables {
                 parts.add(Numbers.withSeparators(loop.lateFireCount()) + " fired late, worst "
                         + Numbers.latency(loop.maxLatenessNanos()));
             }
-            if (!loop.drainedCleanly()) {
-                parts.add("queued work abandoned at the deadline");
+            if (loop.abandonedCount() > 0) {
+                parts.add(Numbers.withSeparators(loop.abandonedCount())
+                        + " still running when the run gave up waiting");
             }
+            if (!loop.drainedCleanly()) {
+                parts.add("did not drain cleanly");
+            }
+            if (loop.scheduledCount() < loop.expectedHits()) {
+                parts.add(Numbers.withSeparators(loop.expectedHits() - loop.scheduledCount())
+                        + " never scheduled");
+            }
+
             notes.append(Ansi.accent("! " + name)).append("  ")
                     .append(Numbers.withSeparators(loop.executedCount())).append(" of ")
-                    .append(Numbers.withSeparators(loop.scheduledCount())).append(" scheduled — ")
+                    .append(Numbers.withSeparators(loop.expectedHits())).append(" expected — ")
                     .append(String.join("; ", parts)).append('\n');
         });
         return notes.toString();

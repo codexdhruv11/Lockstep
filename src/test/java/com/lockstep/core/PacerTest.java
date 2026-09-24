@@ -9,22 +9,24 @@ final class PacerTest {
     private static final long SECOND = 1_000_000_000L;
 
     @Test
-    void withoutRampTheSpacingIsFlat() {
+    void withoutRampTheSpacingIsFlatAndTheFirstHitIsImmediate() {
         Pacer pacer = new Pacer(100, 0);
-        assertThat(pacer.scheduledOffsetNanos(1)).isEqualTo(10_000_000L);
-        assertThat(pacer.scheduledOffsetNanos(50)).isEqualTo(500_000_000L);
-        assertThat(pacer.scheduledOffsetNanos(100)).isEqualTo(SECOND);
+
+        assertThat(pacer.scheduledOffsetNanos(1)).isZero();
+        assertThat(pacer.scheduledOffsetNanos(2)).isEqualTo(10_000_000L);
+        assertThat(pacer.scheduledOffsetNanos(51)).isEqualTo(500_000_000L);
+        assertThat(pacer.scheduledOffsetNanos(100)).isEqualTo(990_000_000L);
     }
 
     @Test
     void rampSchedulesFewerHitsEarlyAndReachesFullRateAtTheRampEnd() {
         Pacer pacer = new Pacer(100, 10 * SECOND);
 
-        assertThat(pacer.scheduledOffsetNanos(500)).isBetween(9_900_000_000L, 10_100_000_000L);
-        long afterRamp = pacer.scheduledOffsetNanos(600) - pacer.scheduledOffsetNanos(500);
+        assertThat(pacer.scheduledOffsetNanos(501)).isBetween(9_900_000_000L, 10_100_000_000L);
+        long afterRamp = pacer.scheduledOffsetNanos(601) - pacer.scheduledOffsetNanos(501);
         assertThat(afterRamp).isBetween(990_000_000L, 1_010_000_000L);
 
-        long firstGap = pacer.scheduledOffsetNanos(2) - pacer.scheduledOffsetNanos(1);
+        long firstGap = pacer.scheduledOffsetNanos(3) - pacer.scheduledOffsetNanos(2);
         long lateGap = pacer.scheduledOffsetNanos(400) - pacer.scheduledOffsetNanos(399);
         assertThat(firstGap).isGreaterThan(lateGap * 5);
     }
@@ -60,17 +62,8 @@ final class PacerTest {
         for (long hit = 1; pacer.scheduledOffsetNanos(hit) < window; hit++) {
             counted++;
         }
-        assertThat(counted).isCloseTo(pacer.expectedHits(window),
-                org.assertj.core.data.Offset.offset(2L));
-    }
 
-    @Test
-    void rateAtGrowsLinearlyThroughTheRampThenHolds() {
-        Pacer pacer = new Pacer(100, 10 * SECOND);
-        assertThat(pacer.rateAt(0)).isEqualTo(1);
-        assertThat(pacer.rateAt(5 * SECOND)).isEqualTo(50);
-        assertThat(pacer.rateAt(10 * SECOND)).isEqualTo(100);
-        assertThat(pacer.rateAt(60 * SECOND)).isEqualTo(100);
+        assertThat(counted).isEqualTo(pacer.expectedHits(window));
     }
 
     @Test

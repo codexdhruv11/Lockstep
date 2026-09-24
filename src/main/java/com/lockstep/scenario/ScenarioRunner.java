@@ -105,10 +105,22 @@ public final class ScenarioRunner implements Runner {
     }
 
     public PacedLoop.LoopResult run(RunContext context, RunProgress.Counter progress) {
+        this.runContext = context;
         this.bucketWidthNanos = context.bucketWidthNanos();
         this.bucketCount = HistogramRecorder.bucketsFor(context.durationNanos(), bucketWidthNanos);
+
+        journeyRecorders.clear();
+        stepRecorders.clear();
+        for (Journey journey : journeys.items()) {
+            recorderFor(journeyRecorders, journey.name());
+            for (int index = 0; index < journey.steps().size(); index++) {
+                recorderFor(stepRecorders, stepKey(journey, index, journey.steps().get(index)));
+            }
+        }
         return PacedLoop.run(context, rate, this::runJourney, progress);
     }
+
+    private volatile RunContext runContext;
 
     private Operation.Outcome runJourney(long scheduledOffsetNanos) {
         Journey journey = journeys.pick();
@@ -141,9 +153,14 @@ public final class ScenarioRunner implements Runner {
 
     private void recordJourney(Journey journey, long scheduledOffsetNanos, long journeyStartNanoTime,
             boolean success, int status) {
-        long serviceNanos = System.nanoTime() - journeyStartNanoTime;
+        long finishedAt = System.nanoTime();
+        long serviceNanos = finishedAt - journeyStartNanoTime;
+        RunContext context = runContext;
+        long latencyNanos = context == null
+                ? serviceNanos
+                : finishedAt - context.deadlineFor(scheduledOffsetNanos);
         recorderFor(journeyRecorders, journey.name())
-                .record(scheduledOffsetNanos, serviceNanos, serviceNanos, success,
+                .record(scheduledOffsetNanos, latencyNanos, serviceNanos, success,
                         status > 0 ? status : null);
     }
 
@@ -168,25 +185,30 @@ public final class ScenarioRunner implements Runner {
     }
 
     public Map<String, BucketSeries> journeySeries() {
-        Map<String, BucketSeries> out = new java.util.LinkedHashMap<>();
-        for (Journey journey : journeys.items()) {
-            HistogramRecorder recorder = journeyRecorders.get(journey.name());
-            if (recorder != null) {
-                out.put(journey.name(), recorder.snapshot());
-            }
-        }
-        return out;
+        return snapshotOf(journeyRecorders, journeys.items().stream().map(Journey::name).toList());
     }
 
     public Map<String, BucketSeries> stepSeries() {
-        Map<String, BucketSeries> out = new java.util.LinkedHashMap<>();
+        List<String> keys = new ArrayList<>();
         for (Journey journey : journeys.items()) {
             for (int index = 0; index < journey.steps().size(); index++) {
-                String key = stepKey(journey, index, journey.steps().get(index));
-                HistogramRecorder recorder = stepRecorders.get(key);
-                if (recorder != null) {
-                    out.put(key, recorder.snapshot());
-                }
+                keys.add(stepKey(journey, index, journey.steps().get(index)));
+            }
+        }
+        return snapshotOf(stepRecorders, keys);
+    }
+
+    private static Map<String, BucketSeries> snapshotOf(Map<String, HistogramRecorder> recorders,
+            List<String> keysInOrder) {
+        Map<String, BucketSeries> out = new java.util.LinkedHashMap<>();
+        for (String key : keysInOrder) {
+            HistogramRecorder recorder = recorders.get(key);
+            if (recorder == null) {
+                continue;
+            }
+            BucketSeries series = recorder.snapshot();
+            if (series.totalCount() > 0) {
+                out.put(key, series);
             }
         }
         return out;

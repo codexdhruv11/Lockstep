@@ -16,7 +16,7 @@ final class RunComparatorTest {
     private static final long SECOND = 1_000_000_000L;
 
     private static RunReport.RunnerReport runner(String name, long p99Nanos) {
-        return new RunReport.RunnerReport(name, 100, 100, 0, 10.0, 100, 100, 0, 0, 0, true,
+        return new RunReport.RunnerReport(name, 100, 100, 0, 10.0, 100, 100, 0, 0, 0, 0, true,
                 p99Nanos / 2, p99Nanos / 2, p99Nanos - MS, p99Nanos, p99Nanos, p99Nanos,
                 Map.of("200", 100L), List.of());
     }
@@ -28,7 +28,7 @@ final class RunComparatorTest {
     private static RunReport report(List<RunReport.RunnerReport> runners,
             List<RunReport.SpikeReport> spikes, double precision, long durationNanos, int concurrency) {
         return new RunReport("lockstep", 1, "test", "2026-09-24T00:00:00Z",
-                durationNanos, SECOND, 0, concurrency, precision, runners, spikes, null, List.of());
+                durationNanos, SECOND, 0, concurrency, precision, runners, spikes, null, List.of(), null);
     }
 
     private static RunReport.SpikeReport spike(String runner, boolean masked) {

@@ -36,22 +36,41 @@ public final class ConnectionStrings {
     }
 
     private static JdbcTarget fromUri(String conn, String subProtocol) {
-        URI uri;
-        try {
-            uri = new URI(conn);
-        } catch (URISyntaxException e) {
-            throw new IllegalArgumentException("connection string is not a valid URI: " + e.getMessage(), e);
-        }
+        int schemeEnd = conn.indexOf("://");
+        String remainder = schemeEnd >= 0 ? conn.substring(schemeEnd + 3) : conn;
         String username = null;
         String password = null;
-        String userInfo = uri.getUserInfo();
-        if (userInfo != null && !userInfo.isEmpty()) {
+        int credentialsEnd = remainder.lastIndexOf('@');
+        if (credentialsEnd >= 0) {
+            String userInfo = remainder.substring(0, credentialsEnd);
+            remainder = remainder.substring(credentialsEnd + 1);
             int separator = userInfo.indexOf(':');
             username = separator < 0 ? userInfo : userInfo.substring(0, separator);
             password = separator < 0 ? null : userInfo.substring(separator + 1);
         }
+        if (remainder.startsWith("tcp(")) {
+            int close = remainder.indexOf(')');
+            if (close < 0) {
+                throw new IllegalArgumentException(
+                        "connection string has an unterminated tcp(...) host: " + conn);
+            }
+            remainder = remainder.substring(4, close) + remainder.substring(close + 1);
+        }
+
+        URI uri;
+        try {
+            uri = new URI("//" + remainder);
+        } catch (URISyntaxException e) {
+            throw new IllegalArgumentException(
+                    "connection string is not a valid URI: " + conn + " (" + e.getMessage() + ")", e);
+        }
+        if (uri.getHost() == null || uri.getHost().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "connection string has no host: " + conn
+                            + " — if the password contains '@' or '/', percent-encode it");
+        }
         StringBuilder url = new StringBuilder("jdbc:").append(subProtocol).append("://");
-        url.append(uri.getHost() == null ? "localhost" : uri.getHost());
+        url.append(uri.getHost());
         if (uri.getPort() > 0) {
             url.append(':').append(uri.getPort());
         }

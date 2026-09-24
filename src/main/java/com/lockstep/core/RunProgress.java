@@ -8,14 +8,23 @@ import java.util.concurrent.atomic.LongAdder;
 public final class RunProgress {
     private final Map<String, Counter> counters = new ConcurrentHashMap<>();
 
+    private final java.util.List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
+
     public Counter forRunner(String runnerName) {
-        return counters.computeIfAbsent(runnerName, name -> new Counter());
+        return counters.computeIfAbsent(runnerName, name -> {
+            order.add(name);
+            return new Counter();
+        });
     }
 
     public Map<String, Counts> snapshot() {
         Map<String, Counts> copy = new LinkedHashMap<>();
-        counters.forEach((name, counter) ->
-                copy.put(name, new Counts(counter.fired.sum(), counter.errors.sum())));
+        for (String name : order) {
+            Counter counter = counters.get(name);
+            if (counter != null) {
+                copy.put(name, new Counts(counter.fired.sum(), counter.errors.sum()));
+            }
+        }
         return copy;
     }
 

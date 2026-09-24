@@ -21,26 +21,19 @@ public final class Pacer {
         if (hitNumber < 1) {
             throw new IllegalArgumentException("hitNumber is 1-based, got " + hitNumber);
         }
+        long index = hitNumber - 1;
         if (rampNanos <= 0) {
-            return (long) ((hitNumber * NANOS_PER_SECOND) / ratePerSecond);
+            return (long) ((index * NANOS_PER_SECOND) / ratePerSecond);
         }
         double rampSeconds = rampNanos / NANOS_PER_SECOND;
         double hitsDuringRamp = ratePerSecond * rampSeconds / 2.0;
         double seconds;
-        if (hitNumber <= hitsDuringRamp) {
-            seconds = Math.sqrt(2.0 * rampSeconds * hitNumber / ratePerSecond);
+        if (index <= hitsDuringRamp) {
+            seconds = Math.sqrt(2.0 * rampSeconds * index / ratePerSecond);
         } else {
-            seconds = rampSeconds + (hitNumber - hitsDuringRamp) / ratePerSecond;
+            seconds = rampSeconds + (index - hitsDuringRamp) / ratePerSecond;
         }
         return (long) (seconds * NANOS_PER_SECOND);
-    }
-
-    public int rateAt(long elapsedNanos) {
-        if (rampNanos > 0 && elapsedNanos < rampNanos) {
-            double scaled = (double) ratePerSecond * elapsedNanos / rampNanos;
-            return Math.max(1, (int) scaled);
-        }
-        return ratePerSecond;
     }
 
     public long expectedHits(long durationNanos) {

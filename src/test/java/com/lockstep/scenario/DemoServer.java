@@ -25,6 +25,15 @@ final class DemoServer implements AutoCloseable {
         server.createContext("/api/me", this::me);
         server.createContext("/api/products", this::products);
         server.createContext("/api/checkout", this::checkout);
+        server.createContext("/api/slow-step", exchange -> {
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            drain(exchange);
+            respond(exchange, 200, "{\"ok\":true}");
+        });
         server.start();
     }
 

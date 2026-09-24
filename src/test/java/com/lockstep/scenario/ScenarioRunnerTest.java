@@ -159,13 +159,40 @@ final class ScenarioRunnerTest {
 
     @Test
     void capturedVariablesDoNotLeakBetweenJourneys() {
-        ScenarioConfig flow = new ScenarioConfig("flow", 1, List.of(
-                step("GET", "/api/products", null, Map.of(), Map.of("sku", "$.items[0].sku")),
-                step("GET", "/api/checkout?token=tok-123", null, Map.of(), Map.of())));
+        ScenarioConfig capturer = new ScenarioConfig("capturer", 50, List.of(
+                step("POST", "/api/login", "{}", Map.of(), Map.of("token", "$.token"))));
+        ScenarioConfig borrower = new ScenarioConfig("borrower", 50, List.of(
+                step("GET", "/api/checkout?token={{token}}", null, Map.of(), Map.of())));
 
-        try (ScenarioRunner runner = ScenarioRunner.create(List.of(flow), 20)) {
-            PacedLoop.LoopResult result = runner.run(RunContext.startingNow(500 * MS, 100 * MS, 0, 4));
-            assertThat(result.series().errorCount()).isZero();
+        try (ScenarioRunner runner = ScenarioRunner.create(List.of(capturer, borrower), 40)) {
+            PacedLoop.LoopResult result = runner.run(RunContext.startingNow(SECOND, 200 * MS, 0, 4));
+
+            assertThat(result.executedCount()).isGreaterThan(10);
+
+            assertThat(result.series().errorCount()).isGreaterThan(0);
+            assertThat(runner.lastFailure()).contains("unresolved").contains("{{token}}");
+            var borrowerSeries = runner.journeySeries().get("borrower");
+            assertThat(borrowerSeries.errorCount()).isEqualTo(borrowerSeries.totalCount());
+
+            assertThat(runner.journeySeries().get("capturer").errorCount()).isZero();
+        }
+    }
+
+    @Test
+    void journeyLatencyIsMeasuredFromTheScheduledInstantNotFromWorkerPickup() {
+        ScenarioConfig slow = new ScenarioConfig("slow", 1,
+                List.of(step("GET", "/api/slow-step", null, Map.of(), Map.of())));
+
+        try (ScenarioRunner runner = ScenarioRunner.create(List.of(slow), 60)) {
+            var context = RunContext.startingAfterSetup(3 * SECOND, 500 * MS, 0, 4);
+            PacedLoop.LoopResult result = runner.run(context);
+
+            long truth = result.series().summarize("x", 3 * SECOND).p99Nanos();
+            long journey = runner.journeySeries().get("slow").summarize("x", 3 * SECOND).p99Nanos();
+
+            assertThat(result.shedCount()).isGreaterThan(0);
+            assertThat(journey).isCloseTo(truth, org.assertj.core.data.Percentage.withPercentage(15));
+            assertThat(journey).isGreaterThan(400 * MS);
         }
     }
 

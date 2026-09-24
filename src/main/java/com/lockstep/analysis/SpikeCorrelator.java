@@ -62,18 +62,28 @@ public final class SpikeCorrelator {
         }
     }
 
+    public static final java.util.Set<String> STORAGE_RUNNERS = java.util.Set.of("db", "redis");
+
     public static CorrelationResult correlate(RunCoordinator.RunResult result, Thresholds thresholds) {
+        return correlate(appTimelineOf(result), storageTimelinesOf(result), thresholds);
+    }
+
+    public static List<Bucket> appTimelineOf(RunCoordinator.RunResult result) {
         PacedLoop.LoopResult http = result.byRunner().get("http");
+        if (http != null) {
+            return http.series().buckets();
+        }
+        return result.scenarioRunner() == null ? List.of() : result.scenarioRunner().appTimeline();
+    }
+
+    public static Map<String, List<Bucket>> storageTimelinesOf(RunCoordinator.RunResult result) {
         Map<String, List<Bucket>> storage = new LinkedHashMap<>();
         result.byRunner().forEach((name, loop) -> {
-            if (!"http".equals(name)) {
+            if (STORAGE_RUNNERS.contains(name)) {
                 storage.put(name, loop.series().buckets());
             }
         });
-        if (http == null) {
-            return CorrelationResult.empty(false);
-        }
-        return correlate(http.series().buckets(), storage, thresholds);
+        return storage;
     }
 
     public static CorrelationResult correlate(List<Bucket> appBuckets,
@@ -99,7 +109,9 @@ public final class SpikeCorrelator {
                 if (appBucket == null) {
                     continue;
                 }
-                boolean masked = appBucket.p99Nanos() <= thresholds.httpNanos();
+                Verdict verdict = verdictFor(runnerName, appBucket.p99Nanos(), storageBucket.p99Nanos());
+
+                boolean masked = appBucket.p99Nanos() <= thresholds.httpNanos() && verdict != Verdict.HTTP;
                 spikes.add(new Spike(
                         storageBucket.index(),
                         storageBucket.startOffsetNanos(),
@@ -107,7 +119,7 @@ public final class SpikeCorrelator {
                         storageBucket.p99Nanos(),
                         appBucket.p99Nanos(),
                         masked,
-                        verdictFor(runnerName, appBucket.p99Nanos(), storageBucket.p99Nanos())));
+                        verdict));
             }
         });
 
