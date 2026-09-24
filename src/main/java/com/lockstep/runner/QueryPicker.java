@@ -18,6 +18,10 @@ public final class QueryPicker {
         return picker.pick();
     }
 
+    public int pickIndex() {
+        return picker.pickIndex();
+    }
+
     public int totalWeight() {
         return picker.totalWeight();
     }

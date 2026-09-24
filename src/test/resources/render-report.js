@@ -17,6 +17,10 @@ const out = {
   headline: global.__renderedText(global.__elements.get("verdict")),
   runners: global.__renderedText(global.__elements.get("runners")),
   spikes: global.__renderedText(global.__elements.get("spikes")),
+  queries: global.__renderedText(global.__elements.get("queries")),
+  plans: global.__renderedText(global.__elements.get("plans")),
+  slowlog: global.__renderedText(global.__elements.get("slowlog"))
+    + " " + global.__renderedText(global.__elements.get("slowlog-note")),
   shortfall: global.__renderedText(global.__elements.get("shortfall")),
   footer: global.__renderedText(global.__elements.get("footer")),
   chartDatasets: (global.chartCalls[0] ? global.chartCalls[0].data.datasets : []).map(d => d.label),

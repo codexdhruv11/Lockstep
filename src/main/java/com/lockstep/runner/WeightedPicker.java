@@ -31,6 +31,10 @@ public final class WeightedPicker<T> {
     }
 
     public T pick() {
+        return items.get(pickIndex());
+    }
+
+    public int pickIndex() {
         int draw = ThreadLocalRandom.current().nextInt(totalWeight);
         int low = 0;
         int high = cumulativeWeights.length - 1;
@@ -42,7 +46,7 @@ public final class WeightedPicker<T> {
                 low = mid + 1;
             }
         }
-        return items.get(low);
+        return low;
     }
 
     public int totalWeight() {

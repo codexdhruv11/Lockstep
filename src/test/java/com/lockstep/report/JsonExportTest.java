@@ -172,4 +172,52 @@ final class JsonExportTest {
         assertThat(p99).isGreaterThan(1_200_000_000L).isLessThan(1_260_000_000L);
         assertThat(JsonExport.toJson(RunReport.from(result, "t"))).doesNotContain("E9");
     }
+
+    @Test
+    void theQueryBreakdownSurvivesTheRoundTripIncludingItsShare() {
+        RunReport base = RunReport.from(sampleRun(), "0.1.0-TEST");
+        RunReport withQueries = new RunReport(base.tool(), base.schemaVersion(), base.toolVersion(),
+                base.startedAt(), base.durationNanos(), base.bucketWidthNanos(), base.rampNanos(),
+                base.concurrency(), base.percentilePrecision(), base.runners(), base.spikes(),
+                base.capacity(), base.steps(),
+                java.util.List.of(new RunReport.QueryReport("db", "q1 SELECT count(*) FROM orders",
+                        10_000, 4, 0.9812, 5 * MS, 5 * MS, 6 * MS, 7 * MS, 9 * MS, 2 * SECOND,
+                        new RunReport.QueryPlanReport("EXPLAIN (ANALYZE, BUFFERS)", true,
+                                "Seq Scan on orders  (actual rows=69720)", null))),
+                base.slowlog(), base.correlation());
+
+        Path file = tempDir.resolve("with-queries.json");
+        JsonExport.write(withQueries, file);
+        RunReport reloaded = JsonExport.read(file);
+
+        assertThat(reloaded).isEqualTo(withQueries);
+        assertThat(reloaded.queries()).singleElement().satisfies(query -> {
+            assertThat(query.runner()).isEqualTo("db");
+            assertThat(query.label()).isEqualTo("q1 SELECT count(*) FROM orders");
+            assertThat(query.shareOfServiceTime()).isEqualTo(0.9812);
+            assertThat(query.count()).isEqualTo(10_000);
+            assertThat(query.errorCount()).isEqualTo(4);
+            assertThat(query.plan().plan()).isEqualTo("Seq Scan on orders  (actual rows=69720)");
+            assertThat(query.plan().executed()).isTrue();
+            assertThat(query.plan().failure()).isNull();
+        });
+    }
+
+    @Test
+    void aFileWrittenBeforeTheQueryBreakdownExistedStillReads() throws Exception {
+        RunReport report = RunReport.from(sampleRun(), "0.1.0-TEST");
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var tree = (com.fasterxml.jackson.databind.node.ObjectNode)
+                mapper.readTree(JsonExport.toJson(report));
+        assertThat(tree.remove("queries"))
+                .withFailMessage("the export must carry a `queries` field for this test to mean anything")
+                .isNotNull();
+
+        Path file = tempDir.resolve("old.json");
+        Files.writeString(file, mapper.writeValueAsString(tree));
+
+        RunReport reloaded = JsonExport.read(file);
+        assertThat(reloaded.queries()).isEmpty();
+        assertThat(reloaded).isEqualTo(report);
+    }
 }

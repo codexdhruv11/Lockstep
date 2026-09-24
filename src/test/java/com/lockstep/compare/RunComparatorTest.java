@@ -34,7 +34,7 @@ final class RunComparatorTest {
     private static RunReport report(List<RunReport.RunnerReport> runners,
             List<RunReport.SpikeReport> spikes, double precision, long durationNanos, int concurrency) {
         return new RunReport("lockstep", 1, "test", "2026-09-24T00:00:00Z",
-                durationNanos, SECOND, 0, concurrency, precision, runners, spikes, null, List.of(), null);
+                durationNanos, SECOND, 0, concurrency, precision, runners, spikes, null, List.of(), List.of(), null, null);
     }
 
     private static RunReport.SpikeReport spike(String runner, boolean masked) {

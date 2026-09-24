@@ -26,6 +26,8 @@ public record RunReport(
         List<SpikeReport> spikes,
         CapacityReport capacity,
         List<StepReport> steps,
+        List<QueryReport> queries,
+        SlowlogReport slowlog,
         CorrelationContext correlation) {
     public static final int SCHEMA_VERSION = 1;
 
@@ -33,7 +35,26 @@ public record RunReport(
         runners = List.copyOf(runners);
         spikes = spikes == null ? List.of() : List.copyOf(spikes);
         steps = steps == null ? List.of() : List.copyOf(steps);
+        queries = queries == null ? List.of() : List.copyOf(queries);
     }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record QueryReport(
+            String runner,
+            String label,
+            long count,
+            long errorCount,
+            double shareOfServiceTime,
+            long serviceMeanNanos,
+            long serviceP50Nanos,
+            long serviceP95Nanos,
+            long serviceP99Nanos,
+            long serviceMaxNanos,
+            long p99Nanos,
+            QueryPlanReport plan) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record QueryPlanReport(String statement, boolean executed, String plan, String failure) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record StepReport(
@@ -104,6 +125,16 @@ public record RunReport(
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
+    public record SlowlogReport(List<SlowlogEntryReport> entries, String note) {
+        public SlowlogReport {
+            entries = entries == null ? List.of() : List.copyOf(entries);
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record SlowlogEntryReport(long id, long durationMicros, String command, String client) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record BucketReport(
             int index,
             long startOffsetNanos,
@@ -126,6 +157,48 @@ public record RunReport(
         }
         boolean storage = result.byRunner().containsKey("db") || result.byRunner().containsKey("redis");
         return new CorrelationContext(correlation.appReferencePresent(), storage);
+    }
+
+    private static List<QueryReport> queryReports(RunCoordinator.RunResult result) {
+        List<QueryReport> queries = new ArrayList<>();
+        if (result.dbRunner() != null) {
+            Map<String, com.lockstep.runner.db.DbRunner.QueryPlan> plans = result.dbRunner().plans();
+            for (QueryBreakdown.Row row : QueryBreakdown.rank(result.dbRunner().queryBreakdown())) {
+                var captured = plans.get(row.label());
+                queries.add(rowFor("db", row, captured == null ? null : new QueryPlanReport(
+                        captured.statement(), captured.executed(), captured.plan(), captured.failure())));
+            }
+        }
+
+        if (result.redisRunner() != null) {
+            for (QueryBreakdown.Row row : QueryBreakdown.rank(result.redisRunner().commandBreakdown())) {
+                queries.add(rowFor("redis", row, null));
+            }
+        }
+        return queries;
+    }
+
+    private static QueryReport rowFor(String runner, QueryBreakdown.Row row, QueryPlanReport plan) {
+        return new QueryReport(runner, row.label(), row.count(), row.errorCount(),
+                row.shareOfServiceTime(), row.serviceMeanNanos(), row.serviceP50Nanos(),
+                row.serviceP95Nanos(), row.serviceP99Nanos(), row.serviceMaxNanos(),
+                row.p99Nanos(), plan);
+    }
+
+    private static SlowlogReport slowlogReport(RunCoordinator.RunResult result) {
+        if (result.redisRunner() == null) {
+            return null;
+        }
+        var runner = result.redisRunner();
+        if (runner.slowlog().isEmpty() && runner.slowlogNote() == null) {
+            return null;
+        }
+        List<SlowlogEntryReport> entries = new ArrayList<>();
+        for (var entry : runner.slowlog()) {
+            entries.add(new SlowlogEntryReport(entry.id(), entry.durationMicros(),
+                    entry.command(), entry.client()));
+        }
+        return new SlowlogReport(entries, runner.slowlogNote());
     }
 
     private static List<StepReport> stepReports(RunCoordinator.RunResult result) {
@@ -166,6 +239,8 @@ public record RunReport(
                 spikeReports(correlation),
                 capacityReport(capacity),
                 stepReports(result),
+                queryReports(result),
+                slowlogReport(result),
                 correlationContext(result, correlation));
     }
 

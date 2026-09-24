@@ -40,6 +40,11 @@
   .chip.masked { color: var(--warn); border-color: var(--warn); }
   .chip.correlated { color: var(--bad); border-color: var(--bad); }
   .note { color: var(--mute); font-size: 13px; margin-top: 8px; }
+  /* Plans are whitespace-significant: Postgres indents each node under its parent, and that
+     indentation is how the tree is read. */
+  pre.plan { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px;
+             overflow-x: auto; font-size: 12.5px; line-height: 1.45; white-space: pre; margin: 6px 0 18px; }
+  #plans h3 { font-size: 14px; margin: 18px 0 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .warn { color: var(--warn); }
   .scroll { overflow-x: auto; }
   canvas { margin-top: 8px; }
@@ -63,6 +68,18 @@
 
   <h2 id="steps-heading" hidden>Steps</h2>
   <div class="scroll"><table id="steps" hidden></table></div>
+
+  <h2 id="queries-heading" hidden>Queries and commands</h2>
+  <div class="scroll"><table id="queries" hidden></table></div>
+  <div class="note" id="queries-note" hidden></div>
+
+  <h2 id="plans-heading" hidden>Query plans</h2>
+  <div id="plans" hidden></div>
+  <div class="note" id="plans-note" hidden></div>
+
+  <h2 id="slowlog-heading" hidden>Redis slowlog</h2>
+  <div class="scroll"><table id="slowlog" hidden></table></div>
+  <div class="note" id="slowlog-note" hidden></div>
 
   <h2 id="spikes-heading" hidden>Correlated spikes</h2>
   <div class="scroll"><table id="spikes" hidden></table></div>
@@ -197,6 +214,71 @@
         return [s.label, num(s.count), num(s.errorCount), ns(s.meanNanos), ns(s.p50Nanos),
           ns(s.p95Nanos), ns(s.p99Nanos), ns(s.maxNanos)];
       }));
+  }
+
+  // --- db queries ----------------------------------------------------------
+  // Share first, then the label: the ranking is the finding, the statement is the detail.
+  if ((data.queries || []).length) {
+    document.getElementById("queries-heading").hidden = false;
+    var queriesTable = document.getElementById("queries");
+    queriesTable.hidden = false;
+    rows(queriesTable,
+      ["Runner", "Query", "Calls", "Share", "Errors", "Mean", "p50", "p95", "p99", "Max"],
+      ["l", "l", "r", "r", "r", "r", "r", "r", "r", "r"],
+      data.queries.map(function (q) {
+        return [q.runner, q.label, num(q.count), pct(q.shareOfServiceTime), num(q.errorCount),
+          ns(q.serviceMeanNanos), ns(q.serviceP50Nanos), ns(q.serviceP95Nanos),
+          ns(q.serviceP99Nanos), ns(q.serviceMaxNanos)];
+      }));
+    var qNote = document.getElementById("queries-note");
+    qNote.hidden = false;
+    qNote.textContent = "Share is of each runner\u2019s total service time (calls \u00d7 mean), not of calls \u2014 "
+      + "a cheap statement run often can own more of the machine than a slow one run rarely. "
+      + "Latencies here are each query\u2019s own cost; the wait including queue delay is in the "
+      + "runners table above.";
+  }
+
+  // --- query plans ----------------------------------------------------------
+  // The plan text is inserted as textContent, never as HTML: it is output from the target's
+  // database, and a table or column name is free to contain angle brackets.
+  var planned = (data.queries || []).filter(function (q) { return q.plan; });
+  if (planned.length) {
+    document.getElementById("plans-heading").hidden = false;
+    var plansBox = document.getElementById("plans");
+    plansBox.hidden = false;
+    planned.forEach(function (q) {
+      plansBox.appendChild(el("h3", q.label));
+      var how = q.plan.statement + (q.plan.executed ? "" : " \u2014 estimates, not measurements");
+      plansBox.appendChild(el("div", how, "note"));
+      plansBox.appendChild(el("pre", q.plan.plan || ("no plan: " + q.plan.failure), "plan"));
+    });
+    var pNote = document.getElementById("plans-note");
+    pNote.hidden = false;
+    pNote.textContent = "Plans were taken after the run, with the load off. They reproduce the "
+      + "shape \u2014 scans, row counts, a sort spilling to disk \u2014 but not lock waits or a "
+      + "cache that was cold only because the run was saturating it.";
+  }
+
+  // --- redis slowlog ---------------------------------------------------------
+  var slowlog = data.slowlog;
+  if (slowlog && (slowlog.entries || []).length) {
+    document.getElementById("slowlog-heading").hidden = false;
+    var slowlogTable = document.getElementById("slowlog");
+    slowlogTable.hidden = false;
+    rows(slowlogTable, ["Server time", "Command", "Client"], ["r", "l", "l"],
+      slowlog.entries.map(function (e) {
+        // The server reports microseconds; the same formatter as everywhere else.
+        return [ns(e.durationMicros * 1000), e.command, e.client || ""];
+      }));
+    document.getElementById("slowlog-note").hidden = false;
+    document.getElementById("slowlog-note").textContent =
+      "The server\u2019s own timing, measured inside Redis. A command this run recorded as slow "
+      + "that is not here waited somewhere other than Redis. The log is server-wide, so another "
+      + "client\u2019s slow commands appear here too.";
+  } else if (slowlog && slowlog.note) {
+    document.getElementById("slowlog-heading").hidden = false;
+    document.getElementById("slowlog-note").hidden = false;
+    document.getElementById("slowlog-note").textContent = slowlog.note;
   }
 
   // --- spikes --------------------------------------------------------------

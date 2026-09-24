@@ -75,6 +75,12 @@ public final class RunCommand implements Callable<Integer> {
     @Option(names = "--redis-threshold", description = "Redis p99 spike threshold (default 100ms).")
     String redisThreshold;
 
+    @Option(names = "--no-explain", description =
+            "Skip the after-the-run diagnostics. By default a plan is taken for each database "
+            + "query whose own p99 crossed --db-threshold, and the server's slowlog is read when "
+            + "a Redis command crossed --redis-threshold.")
+    boolean noExplain;
+
     @Override
     public Integer call() {
         PrintWriter out = spec.commandLine().getOut();
@@ -110,7 +116,10 @@ public final class RunCommand implements Callable<Integer> {
             if (!noProgress) {
                 live.start();
             }
-            result = RunCoordinator.execute(config, progress);
+
+            result = RunCoordinator.execute(config, progress,
+                    noExplain ? 0 : thresholds.dbNanos(),
+                    noExplain ? 0 : thresholds.redisNanos());
             if (!noProgress) {
                 live.printTotals();
             }
@@ -145,6 +154,29 @@ public final class RunCommand implements Callable<Integer> {
             }
         }
 
+        if (result.dbRunner() != null) {
+            String queries = CliTables.queryTable("db queries", result.dbRunner().queryBreakdown(),
+                    result.context().durationNanos());
+            if (!queries.isEmpty()) {
+                out.println();
+                out.print(queries);
+            }
+            String plans = CliTables.planSection(result.dbRunner().plans(),
+                    thresholds.dbNanos(), result.dbRunner().plansSkipped());
+            if (!plans.isEmpty()) {
+                out.println();
+                out.print(plans);
+            }
+        }
+        if (result.redisRunner() != null) {
+            String commands = CliTables.queryTable("redis commands",
+                    result.redisRunner().commandBreakdown(), result.context().durationNanos());
+            if (!commands.isEmpty()) {
+                out.println();
+                out.print(commands);
+            }
+        }
+
         CapacityFinder.Capacity capacity = appTimeline.isEmpty()
                 ? CapacityFinder.Capacity.notUsable(result.context().concurrency())
                 : CapacityFinder.find(appTimeline, result.context().concurrency(),
@@ -173,6 +205,11 @@ public final class RunCommand implements Callable<Integer> {
             }
         }
         RunReport report = RunReport.from(result, Version.value(), correlation, capacity);
+        String slowlog = CliTables.slowlogSection(report.slowlog());
+        if (!slowlog.isEmpty()) {
+            out.println();
+            out.print(slowlog);
+        }
         if (jsonPath != null) {
             JsonExport.write(report, jsonPath);
             out.println();

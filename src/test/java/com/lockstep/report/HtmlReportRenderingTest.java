@@ -26,7 +26,8 @@ final class HtmlReportRenderingTest {
     Path tempDir;
 
     private record Rendered(String headline, String runners, String spikes, String shortfall,
-            String footer, List<String> chartDatasets) {}
+            String footer, String queries, String plans, String slowlog,
+            List<String> chartDatasets) {}
 
     private Rendered render(RunReport report) throws Exception {
         assumeTrue(nodeAvailable(), "node is not available — page rendering test skipped");
@@ -52,7 +53,8 @@ final class HtmlReportRenderingTest {
         json.get("chartDatasets").forEach(node -> datasets.add(node.asText()));
         return new Rendered(json.get("headline").asText(), json.get("runners").asText(),
                 json.get("spikes").asText(), json.get("shortfall").asText(),
-                json.get("footer").asText(), datasets);
+                json.get("footer").asText(), json.get("queries").asText(),
+                json.get("plans").asText(), json.get("slowlog").asText(), datasets);
     }
 
     private Path copyResource(String resource, Path target) throws Exception {
@@ -105,6 +107,73 @@ final class HtmlReportRenderingTest {
         var correlation = SpikeCorrelator.correlate(appTimeline, storage,
                 SpikeCorrelator.Thresholds.defaults());
         return RunReport.from(result, "0.1.0-TEST", correlation, null);
+    }
+
+    @Test
+    void thePageRanksTheDatabaseQueriesByShareOfTime() throws Exception {
+        var result = run(false, true, 5 * MS);
+        RunReport base = reportFor(result, List.of(), Map.of());
+        RunReport withQueries = new RunReport(base.tool(), base.schemaVersion(), base.toolVersion(),
+                base.startedAt(), base.durationNanos(), base.bucketWidthNanos(), base.rampNanos(),
+                base.concurrency(), base.percentilePrecision(), base.runners(), base.spikes(),
+                base.capacity(), base.steps(),
+                List.of(new RunReport.QueryReport("db", "q2 SELECT count(*) FROM orders",
+                                10_000, 0, 0.98, 5 * MS, 5 * MS, 6 * MS, 7 * MS, 9 * MS, 2 * SECOND,
+                                new RunReport.QueryPlanReport("EXPLAIN (ANALYZE, BUFFERS)", true,
+                                        "Aggregate (actual time=2.9..2.9 rows=1)\n"
+                                        + "  -> Seq Scan on orders (actual rows=69720)", null)),
+                        new RunReport.QueryReport("db", "q1 SELECT * FROM audit_log",
+                                10, 0, 0.02, 100 * MS, 100 * MS, 110 * MS, 120 * MS, 130 * MS, 2 * SECOND, null)),
+                base.slowlog(), base.correlation());
+
+        Rendered page = render(withQueries);
+
+        assertThat(page.queries()).contains("q2 SELECT count(*) FROM orders", "98.0%", "10,000");
+        assertThat(page.queries()).contains("q1 SELECT * FROM audit_log", "2.0%");
+        assertThat(page.queries().indexOf("q2 SELECT"))
+                .withFailMessage("the query owning the most database time must come first")
+                .isLessThan(page.queries().indexOf("q1 SELECT"));
+
+        assertThat(page.plans()).contains("Seq Scan on orders", "actual rows=69720");
+        assertThat(page.plans()).contains("EXPLAIN (ANALYZE, BUFFERS)");
+        assertThat(page.plans()).doesNotContain("estimates, not measurements");
+
+        assertThat(page.plans()).doesNotContain("q1 SELECT * FROM audit_log");
+    }
+
+    @Test
+    void thePageShowsTheRedisSlowlogAsTheServersOwnTiming() throws Exception {
+        var result = run(false, true, 5 * MS);
+        RunReport base = reportFor(result, List.of(), Map.of());
+        RunReport withSlowlog = new RunReport(base.tool(), base.schemaVersion(), base.toolVersion(),
+                base.startedAt(), base.durationNanos(), base.bucketWidthNanos(), base.rampNanos(),
+                base.concurrency(), base.percentilePrecision(), base.runners(), base.spikes(),
+                base.capacity(), base.steps(), base.queries(),
+                new RunReport.SlowlogReport(List.of(
+                        new RunReport.SlowlogEntryReport(41, 45_000, "KEYS sess:*", "172.17.0.1:5120")),
+                        null),
+                base.correlation());
+
+        Rendered page = render(withSlowlog);
+
+        assertThat(page.slowlog()).contains("KEYS sess:*", "45ms");
+        assertThat(page.slowlog()).contains("server-wide");
+    }
+
+    @Test
+    void anEmptySlowlogSaysWhyInsteadOfVanishing() throws Exception {
+        var result = run(false, true, 5 * MS);
+        RunReport base = reportFor(result, List.of(), Map.of());
+        RunReport withNote = new RunReport(base.tool(), base.schemaVersion(), base.toolVersion(),
+                base.startedAt(), base.durationNanos(), base.bucketWidthNanos(), base.rampNanos(),
+                base.concurrency(), base.percentilePrecision(), base.runners(), base.spikes(),
+                base.capacity(), base.steps(), base.queries(),
+                new RunReport.SlowlogReport(List.of(),
+                        "the server logged nothing slower than its own "
+                        + "slowlog-log-slower-than (10000\u00b5s)"),
+                base.correlation());
+
+        assertThat(render(withNote).slowlog()).contains("slowlog-log-slower-than", "10000");
     }
 
     @Test

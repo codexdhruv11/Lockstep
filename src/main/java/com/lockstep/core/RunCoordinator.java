@@ -17,27 +17,45 @@ public final class RunCoordinator {
     private RunCoordinator() {}
 
     public record RunResult(RunContext context, Map<String, PacedLoop.LoopResult> byRunner,
-            ScenarioRunner scenarioRunner) {
+            ScenarioRunner scenarioRunner, DbRunner dbRunner, RedisRunner redisRunner) {
+        public RunResult(RunContext context, Map<String, PacedLoop.LoopResult> byRunner,
+                ScenarioRunner scenarioRunner) {
+            this(context, byRunner, scenarioRunner, null, null);
+        }
+
         public RunResult {
             byRunner = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(byRunner));
         }
     }
 
     public static RunResult execute(Config config, RunProgress progress) {
+        return execute(config, progress, 0, 0);
+    }
+
+    public static RunResult execute(Config config, RunProgress progress, long explainThresholdNanos,
+            long redisThresholdNanos) {
         int concurrency = config.concurrency() <= 0 ? RunContext.DEFAULT_CONCURRENCY : config.concurrency();
         List<Runner> runners = build(config, concurrency);
         RunContext context = RunContext.startingAfterSetup(
                 config.duration(), config.bucketWidth(), config.ramp(), config.concurrency());
         try {
             Map<String, PacedLoop.LoopResult> results = runAll(runners, context, progress);
-            ScenarioRunner scenario = runners.stream()
-                    .filter(ScenarioRunner.class::isInstance)
-                    .map(ScenarioRunner.class::cast)
-                    .findFirst().orElse(null);
-            return new RunResult(context, results, scenario);
+            DbRunner db = first(runners, DbRunner.class);
+            if (db != null && explainThresholdNanos > 0) {
+                db.capturePlans(explainThresholdNanos);
+            }
+            RedisRunner redis = first(runners, RedisRunner.class);
+            if (redis != null && redisThresholdNanos > 0) {
+                redis.captureSlowlog(redisThresholdNanos);
+            }
+            return new RunResult(context, results, first(runners, ScenarioRunner.class), db, redis);
         } finally {
             closeAll(runners);
         }
+    }
+
+    private static <T extends Runner> T first(List<Runner> runners, Class<T> type) {
+        return runners.stream().filter(type::isInstance).map(type::cast).findFirst().orElse(null);
     }
 
     static List<Runner> build(Config config, int concurrency) {

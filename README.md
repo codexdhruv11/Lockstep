@@ -77,6 +77,99 @@ Maps each bucket to an estimated active-user count and reports the first **susta
 p99 above twice the healthy baseline for three consecutive buckets, so a GC pause is not mistaken
 for a capacity limit. It prints the assumption alongside the number, every time.
 
+### Per-query breakdown
+
+A database or Redis mix reports one row per statement as well as one row for the runner, so "the
+storage layer is slow" becomes "this one is 96% of it" in a single run:
+
+```
+db queries
+QUERY                                                            CALLS  SHARE  ERR  MEAN   P50     P95     P99
+q1 WITH stats AS ( SELECT COUNT(*) AS total_signals, CO…  350    96.2%  0    103ms  81.8ms  243ms   386ms
+q2 SELECT s.id, s.sku, s.channel, s.direction, s.…  238    2.6%   0    4.1ms  1.3ms   13.9ms  55.1ms
+q3 SELECT id, name, handle, score, call_count F…  132    1.2%   0    3.4ms  1.4ms   12.1ms  43.8ms
+```
+
+**SHARE** is the column to read first: share of total database time, calls × mean. A 2ms statement
+run a thousand times a second owns more of the machine than a 200ms one run twice a minute, and no
+latency column can tell you that.
+
+The latency columns here are each query's **own cost**. Queue delay belongs to the run, not to a
+query — under saturation every statement waits in the same line, so total latency comes out nearly
+identical for all of them and says nothing about which one to fix. The runner's row above keeps
+the full wait, queue delay included.
+
+Redis command mixes get the same table. Labels are derived from the statement, not configured: the reference tool rejects unknown YAML keys, so
+a `name:` field would stop the same config running under both. The leading `qN` is the config
+position, so two entries with identical SQL stay two rows.
+
+### The server's own evidence
+
+When a statement's own p99 crosses its runner's threshold, the tool goes and asks the server what
+it thinks happened.
+
+#### Redis: the slowlog
+
+```
+redis commands
+REDIS COMMANDS           CALLS  SHARE  ERR  MEAN    P50     P95    P99    MAX
+q3 KEYS bulk:1*          59     46.7%  0    132ms   107ms   287ms  304ms  304ms
+q1 GET bulk:42           137    27.2%  0    33.2ms  3.2ms   204ms  245ms  285ms
+q2 SET sess:loadtest ok  104    26.2%  0    42.2ms  22.2ms  169ms  250ms  259ms
+
+redis slowlog
+SERVER_TIME  COMMAND       CLIENT
+45.3ms       KEYS bulk:1*  172.17.0.1:50568
+48.1ms       KEYS bulk:1*  172.17.0.1:50568
+...
+```
+
+Read those two together. `GET` has a p50 of 3.2ms and a p99 of 245ms, and **no `GET` appears in
+the slowlog at all** — the server never spent long on one. Redis executes commands on a single
+thread, so the `GET`s were queued behind the `KEYS`, which the server itself timed at ~45ms each.
+The client-side number says "GET is sometimes slow"; the server's says "GET is never slow, it is
+waiting", and only the second one tells you what to change.
+
+- **Nothing is reset.** `SLOWLOG RESET` would give a clean log and destroy whatever the operator
+  of a shared server was keeping there. The newest entry id is noted before the run and only
+  entries above it are reported — ids are monotonic, so this needs no cooperation and leaves the
+  server as it was found.
+- **The log is server-wide**, and the report says so: another client's slow commands during the
+  same window appear too.
+- **An empty log says why**, including the server's own `slowlog-log-slower-than`. "Nothing was
+  logged" and "the log could not be read" are different answers, and neither is "Redis was fine".
+
+#### Postgres, MySQL, SQLite: the execution plan
+
+When a query's own p99 crosses `--db-threshold`, the tool takes its execution plan and puts it in
+the report:
+
+```
+query plans (p99 above 100ms; taken after the run, with the load off)
+
+q1 WITH stats AS ( SELECT COUNT(*) AS total_signals, CO…
+  EXPLAIN (ANALYZE, BUFFERS)
+  Aggregate  (actual time=101.884..101.885 rows=1 loops=1)
+    ->  Seq Scan on orders  (actual rows=69720 loops=1)
+          Buffers: shared hit=2143 read=1287
+```
+
+`Sort Method: external sort  Disk: 3016kB` is an answer; "the database was slow" is not.
+
+- **Taken after the run**, with the load off. Explaining mid-run would add work the report then
+  describes as the target's behaviour, and would need a free connection at exactly the moment the
+  pool is saturated. The cost is stated in the output: the plan reproduces the *shape* — scans,
+  row counts, a sort spilling to disk — but not lock waits or a cache that was cold only because
+  the run was saturating it.
+- **A write is never re-executed.** `EXPLAIN ANALYZE` runs the statement, so writes get the
+  planner's estimate only, labelled as an estimate. A load-test tool may not quietly write to the
+  target after the run is over.
+- **Only the queries that crossed the threshold**, compared against each query's own cost rather
+  than its total latency — under saturation every statement waits in the same line, so ranking on
+  that would explain the whole config every time the target got busy.
+- Postgres gets `EXPLAIN (ANALYZE, BUFFERS)`, MySQL `EXPLAIN ANALYZE` (8.0.18+), SQLite
+  `EXPLAIN QUERY PLAN`. `--no-explain` turns it off.
+
 ### Scenarios
 
 Multi-step user journeys with variable capture:
@@ -115,7 +208,7 @@ budget is how much extra waiting a user tolerates, so 5ms→40ms passes and 900m
 
 ```
 lockstep run [-c config.yaml] [--duration 30s] [--ramp 10s] [--concurrency 50]
-                [--warmup 5s]
+                [--warmup 5s] [--no-explain]
                 [--http-threshold 150ms] [--db-threshold 250ms] [--redis-threshold 80ms]
                 [--json results.json] [--report report.html] [--no-report] [--buckets]
                 [--no-progress]
@@ -214,8 +307,8 @@ of what this tool is for.
 
 - Load comes from **one process on one machine**. No distributed generation.
 - No WebSocket or streaming load, no browser, no cookie jar for scenarios (token capture only).
-- `compare` diffs p50 and p99 and flags diverging throughput, but does not compare per-step
-  figures.
+- `compare` diffs p50 and p99 and flags diverging throughput, but does not compare per-step or
+  per-query figures.
 - Thresholds are absolute cut-offs; nothing adapts to what is normal for your target.
 - Without `--warmup`, a short run's first bucket can still produce a finding about the JVM.
 
@@ -225,7 +318,7 @@ Requires **Java 21** (virtual threads) and Maven.
 
 ```sh
 mvn clean package            # target/lockstep.jar
-mvn clean verify             # 243 tests; Postgres and Redis tests need Docker
+mvn clean verify             # 275 tests; Postgres and Redis tests need Docker
 ```
 
 Tests that need Docker skip themselves by name when it is unavailable, rather than passing

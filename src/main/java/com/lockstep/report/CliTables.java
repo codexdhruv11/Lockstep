@@ -169,6 +169,100 @@ public final class CliTables {
         return "steps\n" + render(rows);
     }
 
+    public static String queryTable(String heading,
+            Map<String, com.lockstep.stats.BucketSeries> queries, long runDurationNanos) {
+        List<QueryBreakdown.Row> ranked = QueryBreakdown.rank(queries);
+        if (ranked.isEmpty()) {
+            return "";
+        }
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {heading.toUpperCase(), "CALLS", "SHARE", "ERR", "MEAN", "P50",
+            "P95", "P99", "MAX"});
+        for (QueryBreakdown.Row row : ranked) {
+            rows.add(new String[] {
+                row.label(),
+                Numbers.withSeparators(row.count()),
+                Numbers.percent(row.shareOfServiceTime()),
+                Numbers.withSeparators(row.errorCount()),
+                Numbers.latency(row.serviceMeanNanos()),
+                Numbers.latency(row.serviceP50Nanos()),
+                Numbers.latency(row.serviceP95Nanos()),
+                Numbers.latency(row.serviceP99Nanos()),
+                Numbers.latency(row.serviceMaxNanos()),
+            });
+        }
+        return heading + "\n" + render(rows) + Ansi.dim(
+                "  share is of this runner's total service time (calls x mean), not of calls\n"
+                + "  latencies here are each one's own cost; the wait including queue delay is in "
+                + "the runner table above\n");
+    }
+
+    private static final int MAX_PLAN_LINES = 30;
+
+    public static String planSection(
+            Map<String, com.lockstep.runner.db.DbRunner.QueryPlan> plans, long thresholdNanos,
+            int skipped) {
+        if (plans == null || plans.isEmpty()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder("query plans");
+        out.append(Ansi.dim(" (p99 above " + Numbers.latency(thresholdNanos)
+                + "; taken after the run, with the load off)")).append('\n');
+        if (skipped > 0) {
+            out.append(Ansi.dim("  " + skipped + " more crossed the threshold and were not "
+                    + "explained — these own the most database time")).append('\n');
+        }
+        for (var plan : plans.values()) {
+            out.append('\n').append(Ansi.bold(plan.label())).append('\n');
+            if (plan.plan() == null) {
+                out.append("  ").append(Ansi.dim("no plan: " + plan.failure())).append('\n');
+                continue;
+            }
+            out.append("  ").append(Ansi.dim(plan.statement()
+                    + (plan.executed() ? "" : " — estimates, not measurements"))).append('\n');
+            String[] lines = plan.plan().split("\n");
+            for (int i = 0; i < Math.min(lines.length, MAX_PLAN_LINES); i++) {
+                out.append("  ").append(lines[i]).append('\n');
+            }
+            if (lines.length > MAX_PLAN_LINES) {
+                out.append("  ").append(Ansi.dim("... " + (lines.length - MAX_PLAN_LINES)
+                        + " more lines — the full plan is in the report")).append('\n');
+            }
+        }
+        return out.toString();
+    }
+
+    public static String slowlogSection(com.lockstep.report.RunReport.SlowlogReport slowlog) {
+        if (slowlog == null) {
+            return "";
+        }
+        if (slowlog.entries().isEmpty()) {
+            return slowlog.note() == null ? ""
+                    : "redis slowlog\n" + Ansi.dim("  " + slowlog.note()) + "\n";
+        }
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"SERVER_TIME", "COMMAND", "CLIENT"});
+        for (var entry : slowlog.entries()) {
+            rows.add(new String[] {
+                Numbers.latency(entry.durationMicros() * 1_000L),
+                truncate(entry.command()),
+                entry.client() == null ? "" : entry.client(),
+            });
+        }
+        return "redis slowlog\n" + render(rows) + Ansi.dim(
+                "  the server's own timing, from inside the server — a command this run measured "
+                + "as slow\n  but that is not here waited somewhere other than Redis\n"
+                + "  the log is server-wide: another client's slow commands appear here too\n");
+    }
+
+    private static String truncate(String command) {
+        if (command == null) {
+            return "";
+        }
+        String oneLine = command.replaceAll("\\s+", " ").trim();
+        return oneLine.length() <= 70 ? oneLine : oneLine.substring(0, 69) + "\u2026";
+    }
+
     public static String warmupNote(long warmupNanos) {
         return Ansi.dim("first " + com.lockstep.util.Durations.formatNanos(warmupNanos)
                 + " treated as warm-up: still measured and printed above, excluded from spikes "
