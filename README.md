@@ -424,8 +424,9 @@ of what this tool is for.
   answered wrongly.
 - No bytes-in/bytes-out accounting. Counting response payloads needs a custom body subscriber on
   the measurement hot path, and that is a change worth measuring rather than guessing at.
-- `CapacityFinder` cannot see strain that was present from the first bucket — it takes its
-  baseline from the run's own quiet quarter, and a run that was saturated throughout has none.
+- `CapacityFinder` cannot name a strain *point* on a run that was saturated from the first
+  bucket — there is no healthy stretch to measure one against. It reports that case as "already
+  over capacity" rather than as "no strain", which is what it used to do.
 - Without `--warmup`, a short run's first bucket can still produce a finding about the JVM.
 
 ## Build
@@ -434,7 +435,7 @@ Requires **Java 21** (virtual threads) and Maven.
 
 ```sh
 mvn clean package            # target/lockstep.jar
-mvn clean verify             # 309 tests; Postgres and Redis tests need Docker
+mvn clean verify             # 313 tests; Postgres and Redis tests need Docker
 ```
 
 Tests that need Docker skip themselves by name when it is unavailable, rather than passing

@@ -80,7 +80,8 @@ public record RunReport(
             int usersAtEnd,
             long baselineP99Nanos,
             long strainLevelNanos,
-            int suggestedNextConcurrency) {}
+            int suggestedNextConcurrency,
+            boolean overCapacityThroughout) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record SpikeReport(
@@ -264,7 +265,7 @@ public record RunReport(
         return new CapacityReport(capacity.usable(), capacity.strained(),
                 capacity.strainBucketIndex(), capacity.strainOffsetNanos(), capacity.strainUsers(),
                 capacity.usersAtEnd(), capacity.baselineP99Nanos(), capacity.strainLevelNanos(),
-                capacity.suggestedNextConcurrency());
+                capacity.suggestedNextConcurrency(), capacity.overCapacityThroughout());
     }
 
     private static List<SpikeReport> spikeReports(

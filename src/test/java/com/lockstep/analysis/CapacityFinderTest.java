@@ -26,6 +26,54 @@ final class CapacityFinderTest {
     }
 
     @Test
+    void aRunThatWasSaturatedThroughoutIsNotReportedAsHavingNoStrain() {
+        List<Bucket> flatAndTerrible = timeline(20, 2_700 * MS, -1, 0);
+
+        CapacityFinder.Capacity shed =
+                CapacityFinder.find(flatAndTerrible, 10, 0, SECOND, 0, 489.0 / 1200);
+
+        assertThat(shed.overCapacityThroughout())
+                .withFailMessage("a run that delivered 41%% of its load was over capacity, and "
+                        + "saying 'no strain' about it is the opposite of the truth")
+                .isTrue();
+        assertThat(shed.strained()).isFalse();
+
+        assertThat(shed.suggestedNextConcurrency()).isLessThan(10);
+    }
+
+    @Test
+    void theSameFlatTimelineWithNothingShedStillReadsAsNoStrain() {
+        List<Bucket> flatAndTerrible = timeline(20, 2_700 * MS, -1, 0);
+
+        CapacityFinder.Capacity delivered =
+                CapacityFinder.find(flatAndTerrible, 10, 0, SECOND, 0, 1.0);
+
+        assertThat(delivered.overCapacityThroughout()).isFalse();
+        assertThat(delivered.strained()).isFalse();
+        assertThat(delivered.suggestedNextConcurrency()).isGreaterThan(10);
+    }
+
+    @Test
+    void aFewSheddingsAtTheDrainAreNotACapacityVerdict() {
+        List<Bucket> healthy = timeline(20, 10 * MS, -1, 0);
+
+        CapacityFinder.Capacity capacity = CapacityFinder.find(healthy, 10, 0, SECOND, 0, 0.995);
+
+        assertThat(capacity.overCapacityThroughout()).isFalse();
+    }
+
+    @Test
+    void aRunWithARealStrainPointStillReportsThePointEvenIfItAlsoShed() {
+        List<Bucket> turnsBad = timeline(20, 10 * MS, 12, 900 * MS);
+
+        CapacityFinder.Capacity capacity = CapacityFinder.find(turnsBad, 10, 0, SECOND, 0, 0.6);
+
+        assertThat(capacity.strained()).isTrue();
+        assertThat(capacity.overCapacityThroughout()).isFalse();
+        assertThat(capacity.strainBucketIndex()).isEqualTo(12);
+    }
+
+    @Test
     void findsTheFirstSustainedStrainAndEstimatesUsersThere() {
         List<Bucket> buckets = timeline(20, 20 * MS, 10, 400 * MS);
 

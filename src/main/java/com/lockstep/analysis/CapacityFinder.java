@@ -16,6 +16,8 @@ public final class CapacityFinder {
 
     public static final int MINIMUM_BUCKETS = 10;
 
+    static final double DELIVERY_TOLERANCE = 0.98;
+
     private CapacityFinder() {}
 
     public record Capacity(
@@ -25,18 +27,32 @@ public final class CapacityFinder {
             int strainUsers,
             int usersAtEnd,
             long baselineP99Nanos,
-            long strainLevelNanos) {
+            long strainLevelNanos,
+            boolean overCapacityThroughout) {
+        public Capacity(boolean usable, int strainBucketIndex, long strainOffsetNanos,
+                int strainUsers, int usersAtEnd, long baselineP99Nanos, long strainLevelNanos) {
+            this(usable, strainBucketIndex, strainOffsetNanos, strainUsers, usersAtEnd,
+                    baselineP99Nanos, strainLevelNanos, false);
+        }
+
         public static Capacity notUsable(int usersAtEnd) {
-            return new Capacity(false, -1, 0, 0, usersAtEnd, 0, 0);
+            return new Capacity(false, -1, 0, 0, usersAtEnd, 0, 0, false);
         }
 
         public boolean strained() {
             return usable && strainBucketIndex >= 0;
         }
 
+        public boolean overCapacityThroughout() {
+            return usable && overCapacityThroughout;
+        }
+
         public int suggestedNextConcurrency() {
             if (!usable) {
                 return usersAtEnd;
+            }
+            if (overCapacityThroughout()) {
+                return Math.max(1, usersAtEnd / 2);
             }
             return strained() ? Math.max(strainUsers + 1, (int) (strainUsers * 1.5)) : usersAtEnd * 2;
         }
@@ -49,6 +65,11 @@ public final class CapacityFinder {
 
     public static Capacity find(List<Bucket> appBuckets, int concurrency, long rampNanos,
             long bucketWidthNanos, long warmupNanos) {
+        return find(appBuckets, concurrency, rampNanos, bucketWidthNanos, warmupNanos, 1.0);
+    }
+
+    public static Capacity find(List<Bucket> appBuckets, int concurrency, long rampNanos,
+            long bucketWidthNanos, long warmupNanos, double deliveryRatio) {
         int usersAtEnd = Math.max(0, concurrency);
         if (appBuckets == null || concurrency <= 0 || bucketWidthNanos <= 0) {
             return Capacity.notUsable(usersAtEnd);
@@ -63,6 +84,7 @@ public final class CapacityFinder {
 
         long baseline = baselineP99(populated);
         long strainLevel = Math.max((long) (baseline * STRAIN_MULTIPLE), baseline + STRAIN_FLOOR_NANOS);
+        boolean shedLoad = deliveryRatio < DELIVERY_TOLERANCE;
 
         for (int i = 0; i + SUSTAINED_BUCKETS - 1 < populated.size(); i++) {
             boolean sustained = true;
@@ -82,7 +104,8 @@ public final class CapacityFinder {
                         usersAtEnd, baseline, strainLevel);
             }
         }
-        return new Capacity(true, -1, 0, 0, usersAtEnd, baseline, strainLevel);
+
+        return new Capacity(true, -1, 0, 0, usersAtEnd, baseline, strainLevel, shedLoad);
     }
 
     static int usersAt(long offsetNanos, int concurrency, long rampNanos, long bucketWidthNanos) {

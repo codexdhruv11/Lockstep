@@ -206,7 +206,7 @@ public final class RunCommand implements Callable<Integer> {
                 ? CapacityFinder.Capacity.notUsable(result.context().concurrency())
                 : CapacityFinder.find(appTimeline, result.context().concurrency(),
                         result.context().rampNanos(), result.context().bucketWidthNanos(),
-                        warmupNanos);
+                        warmupNanos, appDeliveryRatio(result));
         if (!appTimeline.isEmpty()) {
             out.println();
             out.print(CliTables.capacityLine(capacity, warmupNanos));
@@ -249,6 +249,17 @@ public final class RunCommand implements Callable<Integer> {
         out.println(CliTables.precisionNote());
         out.flush();
         return EXIT_SUCCESS;
+    }
+
+    private static double appDeliveryRatio(RunCoordinator.RunResult result) {
+        var loop = result.byRunner().get("http");
+        if (loop == null) {
+            loop = result.byRunner().get("scenario");
+        }
+        if (loop == null || loop.scheduledCount() <= 0) {
+            return 1.0;
+        }
+        return (double) loop.executedCount() / loop.scheduledCount();
     }
 
     private SpikeCorrelator.Thresholds thresholds() {

@@ -119,14 +119,22 @@ public final class CliTables {
                     + com.lockstep.analysis.CapacityFinder.MINIMUM_BUCKETS
                     + "+ buckets with traffic" + because + ")\n");
         }
-        String headline = capacity.strained()
-                ? "capacity: strain starts around ~%d users (at %s, p99 crossed %s against a %s baseline)"
-                        .formatted(capacity.strainUsers(), Numbers.clock(capacity.strainOffsetNanos()),
-                                Numbers.latency(capacity.strainLevelNanos()),
-                                Numbers.latency(capacity.baselineP99Nanos()))
-                : "capacity: no strain up to ~%d users (baseline p99 %s)"
-                        .formatted(capacity.usersAtEnd(), Numbers.latency(capacity.baselineP99Nanos()));
-        String next = "  re-test at concurrency " + capacity.suggestedNextConcurrency();
+        String headline;
+        if (capacity.strained()) {
+            headline = "capacity: strain starts around ~%d users (at %s, p99 crossed %s against a %s baseline)"
+                    .formatted(capacity.strainUsers(), Numbers.clock(capacity.strainOffsetNanos()),
+                            Numbers.latency(capacity.strainLevelNanos()),
+                            Numbers.latency(capacity.baselineP99Nanos()));
+        } else if (capacity.overCapacityThroughout()) {
+            headline = "capacity: already over capacity at ~%d users".formatted(capacity.usersAtEnd())
+                    + "\n  load was shed for the whole run, so there was no healthy stretch to "
+                    + "measure a strain point against";
+        } else {
+            headline = "capacity: no strain up to ~%d users (baseline p99 %s)"
+                    .formatted(capacity.usersAtEnd(), Numbers.latency(capacity.baselineP99Nanos()));
+        }
+        String next = (capacity.overCapacityThroughout() ? "  re-test lower, at concurrency "
+                : "  re-test at concurrency ") + capacity.suggestedNextConcurrency();
         String caveat = Ansi.dim(
                 "  users are estimated from concurrency, not measured — one worker is not one user");
         return headline + "\n" + next + "\n" + caveat + "\n";
