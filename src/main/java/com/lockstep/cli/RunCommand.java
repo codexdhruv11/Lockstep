@@ -54,6 +54,11 @@ public final class RunCommand implements Callable<Integer> {
     @Option(names = "--buckets", description = "Print the per-bucket table for each runner.")
     boolean showBuckets;
 
+    @Option(names = "--distribution", description =
+            "Print the latency histogram for each runner. Percentiles cannot show a bimodal "
+            + "distribution; this can.")
+    boolean showDistribution;
+
     @Option(names = "--no-progress", description = "Suppress the live progress line on stderr.")
     boolean noProgress;
 
@@ -136,10 +141,22 @@ public final class RunCommand implements Callable<Integer> {
             out.println();
             out.print(shortfall);
         }
+
+        String failures = CliTables.errorTable(result);
+        if (!failures.isEmpty()) {
+            out.println();
+            out.print(failures);
+        }
         if (showBuckets) {
             result.byRunner().forEach((name, loop) -> {
                 out.println();
                 out.print(CliTables.bucketTable(name, loop));
+            });
+        }
+        if (showDistribution) {
+            result.byRunner().forEach((name, loop) -> {
+                out.println();
+                out.print(CliTables.distributionTable(name, loop));
             });
         }
 
@@ -154,6 +171,14 @@ public final class RunCommand implements Callable<Integer> {
             }
         }
 
+        if (result.httpRunner() != null) {
+            String targets = CliTables.queryTable("http targets",
+                    result.httpRunner().targetBreakdown(), result.context().durationNanos());
+            if (!targets.isEmpty()) {
+                out.println();
+                out.print(targets);
+            }
+        }
         if (result.dbRunner() != null) {
             String queries = CliTables.queryTable("db queries", result.dbRunner().queryBreakdown(),
                     result.context().durationNanos());

@@ -69,6 +69,9 @@
   <h2 id="steps-heading" hidden>Steps</h2>
   <div class="scroll"><table id="steps" hidden></table></div>
 
+  <h2 id="failures-heading" hidden>Failures</h2>
+  <div class="scroll"><table id="failures" hidden></table></div>
+
   <h2 id="queries-heading" hidden>Queries and commands</h2>
   <div class="scroll"><table id="queries" hidden></table></div>
   <div class="note" id="queries-note" hidden></div>
@@ -177,16 +180,31 @@
 
   // --- runners -------------------------------------------------------------
   rows(document.getElementById("runners"),
-    ["Runner", "Requests", "Success", "Rate", "Mean", "p50", "p95", "p99", "Max", "Status"],
-    ["l", "r", "r", "r", "r", "r", "r", "r", "r", "l"],
+    ["Runner", "Requests", "Success", "Rate", "Min", "Mean", "p50", "p90", "p95", "p99", "Max", "Status"],
+    ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "l"],
     (data.runners || []).map(function (r) {
       var statuses = Object.keys(r.statusCounts || {}).map(function (code) {
         return code + "×" + num(r.statusCounts[code]);
       }).join(" ") || "-";
       return [r.name, num(r.count), pct(r.count ? r.successCount / r.count : 0),
-        (r.achievedRatePerSecond || 0).toFixed(1) + "/s", ns(r.meanNanos), ns(r.p50Nanos),
-        ns(r.p95Nanos), ns(r.p99Nanos), ns(r.maxNanos), statuses];
+        (r.achievedRatePerSecond || 0).toFixed(1) + "/s", ns(r.minNanos), ns(r.meanNanos),
+        ns(r.p50Nanos), ns(r.p90Nanos), ns(r.p95Nanos), ns(r.p99Nanos), ns(r.maxNanos), statuses];
     }));
+
+  // --- failures --------------------------------------------------------------
+  // What failed, not just how many did. Inserted as text: these messages come from the target.
+  var failureRows = [];
+  (data.runners || []).forEach(function (r) {
+    Object.keys(r.errorCounts || {}).forEach(function (message) {
+      failureRows.push([r.name, num(r.errorCounts[message]), message]);
+    });
+  });
+  if (failureRows.length) {
+    document.getElementById("failures-heading").hidden = false;
+    var failuresTable = document.getElementById("failures");
+    failuresTable.hidden = false;
+    rows(failuresTable, ["Runner", "Count", "Failure"], ["l", "r", "l"], failureRows);
+  }
 
   var short = (data.runners || []).filter(function (r) {
     return r.shedCount > 0 || r.lateFireCount > 0 || r.drainedCleanly === false;

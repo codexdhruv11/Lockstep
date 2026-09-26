@@ -6,11 +6,17 @@ import com.lockstep.core.PacedLoop;
 import com.lockstep.core.RunContext;
 import com.lockstep.core.RunProgress;
 import com.lockstep.core.Runner;
+import com.lockstep.runner.QueryLabels;
+import com.lockstep.runner.WeightedPicker;
+import com.lockstep.stats.BucketSeries;
+import com.lockstep.stats.HistogramRecorder;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -19,18 +25,46 @@ public final class HttpRunner implements Runner {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
     private final HttpClient client;
-    private final HttpRequest.Builder template;
+    private final WeightedPicker<Endpoint> endpoints;
+    private final List<String> targetLabels;
     private final int rate;
     private final AtomicReference<String> lastFailure = new AtomicReference<>();
 
-    private HttpRunner(HttpClient client, HttpRequest.Builder template, int rate) {
+    private volatile HistogramRecorder[] targetRecorders;
+    private volatile RunContext runContext;
+
+    private HttpRunner(HttpClient client, WeightedPicker<Endpoint> endpoints,
+            List<String> targetLabels, int rate) {
         this.client = client;
-        this.template = template;
+        this.endpoints = endpoints;
+        this.targetLabels = targetLabels;
         this.rate = rate;
     }
 
     public static HttpRunner create(HttpConfig config, int concurrency) {
-        HttpConfig.Target target = config.target();
+        List<HttpConfig.Target> targets = config.allTargets();
+        HttpClient client = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .connectTimeout(REQUEST_TIMEOUT)
+                .build();
+
+        List<Endpoint> endpoints = new ArrayList<>(targets.size());
+        List<String> methods = new ArrayList<>(targets.size());
+        List<String> urls = new ArrayList<>(targets.size());
+        for (HttpConfig.Target target : targets) {
+            endpoints.add(new Endpoint(templateFor(target), target.weight()));
+            methods.add(target.method());
+            urls.add(target.url());
+        }
+
+        return new HttpRunner(client, new WeightedPicker<>(endpoints, Endpoint::weight, true),
+                QueryLabels.forTargets(methods, urls), config.rate());
+    }
+
+    private record Endpoint(HttpRequest.Builder request, int weight) {}
+
+    private static HttpRequest.Builder templateFor(HttpConfig.Target target) {
         URI uri;
         try {
             uri = URI.create(target.url());
@@ -41,19 +75,12 @@ public final class HttpRunner implements Runner {
             throw new IllegalArgumentException(
                     "http target url must be absolute (scheme and host), got: " + target.url());
         }
-
-        HttpClient client = HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .connectTimeout(REQUEST_TIMEOUT)
-                .build();
-
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri).timeout(REQUEST_TIMEOUT);
         applyHeaders(builder, target.header());
         builder.method(methodOf(target), bodyOf(target));
 
         builder.build();
-        return new HttpRunner(client, builder, config.rate());
+        return builder;
     }
 
     @Override
@@ -62,7 +89,14 @@ public final class HttpRunner implements Runner {
     }
 
     public PacedLoop.LoopResult run(RunContext context, RunProgress.Counter progress) {
-        return PacedLoop.run(context, rate, scheduledOffset -> executeOne(), progress);
+        this.runContext = context;
+        int buckets = HistogramRecorder.bucketsFor(context.durationNanos(), context.bucketWidthNanos());
+        HistogramRecorder[] recorders = new HistogramRecorder[targetLabels.size()];
+        for (int i = 0; i < recorders.length; i++) {
+            recorders[i] = new HistogramRecorder(context.bucketWidthNanos(), buckets);
+        }
+        this.targetRecorders = recorders;
+        return PacedLoop.run(context, rate, this::executeOne, progress);
     }
 
     @Override
@@ -70,7 +104,19 @@ public final class HttpRunner implements Runner {
         return "http";
     }
 
-    private Operation.Outcome executeOne() {
+    private Operation.Outcome executeOne(long scheduledOffsetNanos) {
+        int index = endpoints.pickIndex();
+        long startedAt = System.nanoTime();
+        Operation.Outcome outcome = Operation.Outcome.OK;
+        try {
+            outcome = send(endpoints.items().get(index).request());
+            return outcome;
+        } finally {
+            recordTarget(index, scheduledOffsetNanos, startedAt, outcome);
+        }
+    }
+
+    private Operation.Outcome send(HttpRequest.Builder template) {
         try {
             HttpResponse<Void> response = client.send(template.build(), HttpResponse.BodyHandlers.discarding());
             int status = response.statusCode();
@@ -84,6 +130,37 @@ public final class HttpRunner implements Runner {
             lastFailure.set(described);
             return Operation.Outcome.failed(described);
         }
+    }
+
+    private void recordTarget(int index, long scheduledOffsetNanos, long startedAt,
+            Operation.Outcome outcome) {
+        HistogramRecorder[] recorders = targetRecorders;
+        RunContext context = runContext;
+        if (recorders == null || context == null || index >= recorders.length) {
+            return;
+        }
+        long finishedAt = System.nanoTime();
+        recorders[index].record(
+                scheduledOffsetNanos,
+                finishedAt - context.deadlineFor(scheduledOffsetNanos),
+                finishedAt - startedAt,
+                outcome.success(),
+                outcome.statusCode());
+    }
+
+    public Map<String, BucketSeries> targetBreakdown() {
+        HistogramRecorder[] recorders = targetRecorders;
+        Map<String, BucketSeries> out = new LinkedHashMap<>();
+        if (recorders == null) {
+            return out;
+        }
+        for (int i = 0; i < recorders.length && i < targetLabels.size(); i++) {
+            BucketSeries series = recorders[i].snapshot();
+            if (series.totalCount() > 0) {
+                out.put(targetLabels.get(i), series);
+            }
+        }
+        return out;
     }
 
     private static void applyHeaders(HttpRequest.Builder builder, Map<String, List<String>> headers) {

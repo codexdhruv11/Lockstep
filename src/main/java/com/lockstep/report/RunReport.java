@@ -109,17 +109,23 @@ public record RunReport(
             long clampedEarlyCount,
             long clampedLateCount,
             long meanNanos,
+            long minNanos,
             long p50Nanos,
+            long p90Nanos,
             long p95Nanos,
             long p99Nanos,
             long maxNanos,
             long serviceP99Nanos,
             Map<String, Long> statusCounts,
+            Map<String, Long> errorCounts,
             List<BucketReport> buckets) {
         public RunnerReport {
             statusCounts = statusCounts == null
                     ? Map.of()
                     : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(statusCounts));
+            errorCounts = errorCounts == null
+                    ? Map.of()
+                    : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(errorCounts));
             buckets = buckets == null ? List.of() : List.copyOf(buckets);
         }
     }
@@ -161,6 +167,12 @@ public record RunReport(
 
     private static List<QueryReport> queryReports(RunCoordinator.RunResult result) {
         List<QueryReport> queries = new ArrayList<>();
+
+        if (result.httpRunner() != null) {
+            for (QueryBreakdown.Row row : QueryBreakdown.rank(result.httpRunner().targetBreakdown())) {
+                queries.add(rowFor("http", row, null));
+            }
+        }
         if (result.dbRunner() != null) {
             Map<String, com.lockstep.runner.db.DbRunner.QueryPlan> plans = result.dbRunner().plans();
             for (QueryBreakdown.Row row : QueryBreakdown.rank(result.dbRunner().queryBreakdown())) {
@@ -289,8 +301,9 @@ public record RunReport(
                 loop.shedCount(), loop.abandonedCount(), loop.lateFireCount(),
                 loop.maxLatenessNanos(), loop.drainedCleanly(),
                 summary.clampedEarlyCount(), summary.clampedLateCount(),
-                summary.meanNanos(), summary.p50Nanos(), summary.p95Nanos(), summary.p99Nanos(),
-                summary.maxNanos(), summary.serviceP99Nanos(), statuses, buckets);
+                summary.meanNanos(), summary.minNanos(), summary.p50Nanos(), summary.p90Nanos(),
+                summary.p95Nanos(), summary.p99Nanos(),
+                summary.maxNanos(), summary.serviceP99Nanos(), statuses, loop.errorCounts(), buckets);
     }
 
     public RunnerReport runner(String name) {

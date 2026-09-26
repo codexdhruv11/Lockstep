@@ -72,10 +72,11 @@ public final class ConfigLoader {
     private static final Map<String, Set<String>> KNOWN_KEYS_BY_PATH = Map.ofEntries(
             Map.entry("", Set.of("duration", "bucket_width", "ramp", "concurrency",
                     "http", "db", "redis", "scenario")),
-            Map.entry("http", Set.of("rate", "target")),
+            Map.entry("http", Set.of("rate", "target", "targets")),
             Map.entry("db", Set.of("rate", "target")),
             Map.entry("redis", Set.of("rate", "target")),
-            Map.entry("http.target", Set.of("method", "url", "body", "header")),
+            Map.entry("http.target", Set.of("method", "url", "body", "header", "weight")),
+            Map.entry("http.targets.*", Set.of("method", "url", "body", "header", "weight")),
             Map.entry("db.target", Set.of("conn", "driver", "queries", "pool_size")),
             Map.entry("redis.target", Set.of("addr", "password", "db", "queries")),
             Map.entry("db.target.queries.*", Set.of("query", "weight", "type", "args")),
@@ -84,7 +85,8 @@ public final class ConfigLoader {
             Map.entry("scenario.*.steps.*", Set.of("method", "url", "body", "headers", "extract")));
 
     private static final Set<String> FREE_FORM_MAP_PATHS = Set.of(
-            "http.target.header", "scenario.*.steps.*.headers", "scenario.*.steps.*.extract");
+            "http.target.header", "http.targets.*.header",
+            "scenario.*.steps.*.headers", "scenario.*.steps.*.extract");
 
     private static void rejectUnknownKeys(Map<String, Object> node, String containerPath) {
         Set<String> known = KNOWN_KEYS_BY_PATH.get(containerPath);
@@ -189,12 +191,33 @@ public final class ConfigLoader {
         if (http.rate() <= 0) {
             throw new ConfigValidationException("http.rate", at + ": http rate must be greater than zero");
         }
-        String method = http.target().method();
-        if (!method.isBlank() && !VALID_METHODS.contains(method.toUpperCase())) {
-            throw new ConfigValidationException("http.target.method", at + ": http target: invalid method \"" + method + "\"");
+
+        String where = http.isMultiTarget() ? "http.targets" : "http.target";
+        List<HttpConfig.Target> targets = http.allTargets();
+        for (int i = 0; i < targets.size(); i++) {
+            HttpConfig.Target target = targets.get(i);
+            String which = http.isMultiTarget() ? where + "[" + i + "]" : where;
+            String method = target.method();
+            if (!method.isBlank() && !VALID_METHODS.contains(method.toUpperCase())) {
+                throw new ConfigValidationException(which + ".method",
+                        at + ": " + which + ": invalid method \"" + method + "\"");
+            }
+            if (target.url().isBlank()) {
+                throw new ConfigValidationException(which + ".url",
+                        at + ": " + which + " url must not be empty");
+            }
+            if (target.weight() < 0) {
+                throw new ConfigValidationException(which + ".weight",
+                        at + ": " + which + " weight must not be negative");
+            }
         }
-        if (http.target().url().isBlank()) {
-            throw new ConfigValidationException("http.target.url", at + ": http target url must not be empty");
+
+        if (http.isMultiTarget() && targets.stream().allMatch(t -> t.weight() == 0)) {
+            return;
+        }
+        if (http.isMultiTarget() && targets.stream().mapToInt(HttpConfig.Target::weight).sum() <= 0) {
+            throw new ConfigValidationException(where + ".weight",
+                    at + ": at least one http target must have a weight above zero");
         }
     }
 

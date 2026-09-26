@@ -28,7 +28,7 @@ public record BucketSeries(
         double achievedRate = seconds > 0 ? totalCount / seconds : 0;
         if (totalCount == 0) {
             return new RunnerSummary(runnerName, 0, 0, 0, achievedRate,
-                    0, 0, 0, 0, 0, 0, statusCounts, clampedEarlyCount, clampedLateCount);
+                    0, 0, 0, 0, 0, 0, 0, 0, statusCounts, clampedEarlyCount, clampedLateCount);
         }
         return new RunnerSummary(
                 runnerName,
@@ -37,7 +37,9 @@ public record BucketSeries(
                 errorCount,
                 achievedRate,
                 (long) mergedLatency.getMean(),
+                mergedLatency.getMinValue(),
                 mergedLatency.getValueAtPercentile(50),
+                mergedLatency.getValueAtPercentile(90),
                 mergedLatency.getValueAtPercentile(95),
                 mergedLatency.getValueAtPercentile(99),
                 mergedLatency.getMaxValue(),

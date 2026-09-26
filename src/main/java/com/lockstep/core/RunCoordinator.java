@@ -17,10 +17,11 @@ public final class RunCoordinator {
     private RunCoordinator() {}
 
     public record RunResult(RunContext context, Map<String, PacedLoop.LoopResult> byRunner,
-            ScenarioRunner scenarioRunner, DbRunner dbRunner, RedisRunner redisRunner) {
+            ScenarioRunner scenarioRunner, DbRunner dbRunner, RedisRunner redisRunner,
+            HttpRunner httpRunner) {
         public RunResult(RunContext context, Map<String, PacedLoop.LoopResult> byRunner,
                 ScenarioRunner scenarioRunner) {
-            this(context, byRunner, scenarioRunner, null, null);
+            this(context, byRunner, scenarioRunner, null, null, null);
         }
 
         public RunResult {
@@ -48,7 +49,8 @@ public final class RunCoordinator {
             if (redis != null && redisThresholdNanos > 0) {
                 redis.captureSlowlog(redisThresholdNanos);
             }
-            return new RunResult(context, results, first(runners, ScenarioRunner.class), db, redis);
+            return new RunResult(context, results, first(runners, ScenarioRunner.class), db, redis,
+                    first(runners, HttpRunner.class));
         } finally {
             closeAll(runners);
         }

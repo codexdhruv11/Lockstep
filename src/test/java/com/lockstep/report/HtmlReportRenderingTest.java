@@ -26,7 +26,7 @@ final class HtmlReportRenderingTest {
     Path tempDir;
 
     private record Rendered(String headline, String runners, String spikes, String shortfall,
-            String footer, String queries, String plans, String slowlog,
+            String footer, String queries, String plans, String slowlog, String failures,
             List<String> chartDatasets) {}
 
     private Rendered render(RunReport report) throws Exception {
@@ -54,7 +54,8 @@ final class HtmlReportRenderingTest {
         return new Rendered(json.get("headline").asText(), json.get("runners").asText(),
                 json.get("spikes").asText(), json.get("shortfall").asText(),
                 json.get("footer").asText(), json.get("queries").asText(),
-                json.get("plans").asText(), json.get("slowlog").asText(), datasets);
+                json.get("plans").asText(), json.get("slowlog").asText(),
+                json.get("failures").asText(), datasets);
     }
 
     private Path copyResource(String resource, Path target) throws Exception {
@@ -174,6 +175,33 @@ final class HtmlReportRenderingTest {
                 base.correlation());
 
         assertThat(render(withNote).slowlog()).contains("slowlog-log-slower-than", "10000");
+    }
+
+    @Test
+    void thePageNamesWhatFailedNotJustHowMuchDid() throws Exception {
+        var result = run(true, false, 0);
+        RunReport base = reportFor(result, List.of(), Map.of());
+        var runner = base.runners().get(0);
+        RunReport.RunnerReport withErrors = new RunReport.RunnerReport(
+                runner.name(), runner.count(), runner.successCount(), 12, runner.achievedRatePerSecond(),
+                runner.scheduledCount(), runner.expectedHits(), runner.shedCount(),
+                runner.abandonedCount(), runner.lateFireCount(), runner.maxLatenessNanos(),
+                runner.drainedCleanly(), runner.clampedEarlyCount(), runner.clampedLateCount(),
+                runner.meanNanos(), runner.minNanos(), runner.p50Nanos(), runner.p90Nanos(),
+                runner.p95Nanos(), runner.p99Nanos(), runner.maxNanos(), runner.serviceP99Nanos(),
+                runner.statusCounts(),
+                new java.util.LinkedHashMap<>(Map.of("ConnectException: Connection refused", 12L)),
+                runner.buckets());
+        RunReport report = new RunReport(base.tool(), base.schemaVersion(), base.toolVersion(),
+                base.startedAt(), base.durationNanos(), base.bucketWidthNanos(), base.rampNanos(),
+                base.concurrency(), base.percentilePrecision(), List.of(withErrors), base.spikes(),
+                base.capacity(), base.steps(), base.queries(), base.slowlog(), base.correlation());
+
+        Rendered page = render(report);
+
+        assertThat(page.failures()).contains("ConnectException: Connection refused", "12");
+
+        assertThat(page.runners()).contains("Min", "p90");
     }
 
     @Test

@@ -17,7 +17,9 @@ public final class CliTables {
 
     public static String summaryTable(RunCoordinator.RunResult result) {
         List<String[]> rows = new ArrayList<>();
-        rows.add(new String[] {"RUNNER", "REQUESTS", "SUCCESS", "RATE", "MEAN", "P50", "P95", "P99", "MAX", "STATUS"});
+
+        rows.add(new String[] {"RUNNER", "REQUESTS", "SUCCESS", "RATE", "MIN", "MEAN", "P50",
+            "P90", "P95", "P99", "MAX", "STATUS"});
 
         result.byRunner().forEach((name, loop) -> {
             RunnerSummary summary = loop.series().summarize(name, result.context().durationNanos());
@@ -26,8 +28,10 @@ public final class CliTables {
                 Numbers.withSeparators(summary.count()),
                 Numbers.percent(summary.successRate()),
                 Numbers.rate(summary.achievedRatePerSecond()),
+                Numbers.latency(summary.minNanos()),
                 Numbers.latency(summary.meanNanos()),
                 Numbers.latency(summary.p50Nanos()),
+                Numbers.latency(summary.p90Nanos()),
                 Numbers.latency(summary.p95Nanos()),
                 Numbers.latency(summary.p99Nanos()),
                 Numbers.latency(summary.maxNanos()),
@@ -353,6 +357,77 @@ public final class CliTables {
         return result.steps().stream()
                 .mapToDouble(com.lockstep.analysis.CapacitySearch.Observation::multiplier)
                 .min().orElse(1.0);
+    }
+
+    public static String errorTable(RunCoordinator.RunResult result) {
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"RUNNER", "COUNT", "FAILURE"});
+        result.byRunner().forEach((name, loop) ->
+                loop.errorCounts().forEach((message, count) -> rows.add(new String[] {
+                    name, Numbers.withSeparators(count), message,
+                })));
+        if (rows.size() <= 1) {
+            return "";
+        }
+        String note = "";
+        if (result.byRunner().values().stream()
+                .anyMatch(loop -> loop.errorCounts().containsKey(
+                        com.lockstep.stats.ErrorCounts.OVERFLOW_KEY))) {
+            note = Ansi.dim("  the distinct-message list is capped; the rest are pooled in the "
+                    + "last row\n");
+        }
+        return "failures\n" + render(rows) + note;
+    }
+
+    private static final long[] DISTRIBUTION_EDGES_NANOS = {
+        1_000_000L, 5_000_000L, 10_000_000L, 25_000_000L, 50_000_000L, 100_000_000L,
+        250_000_000L, 500_000_000L, 1_000_000_000L, 2_500_000_000L, 5_000_000_000L, 10_000_000_000L,
+    };
+
+    private static final int DISTRIBUTION_BAR_WIDTH = 40;
+
+    public static String distributionTable(String runnerName, PacedLoop.LoopResult loop) {
+        var merged = loop.series().mergedLatency();
+        long total = merged.getTotalCount();
+        if (total == 0) {
+            return "";
+        }
+        long[] counts = new long[DISTRIBUTION_EDGES_NANOS.length + 1];
+        long previousEdge = 0;
+        for (int i = 0; i < DISTRIBUTION_EDGES_NANOS.length; i++) {
+            counts[i] = merged.getCountBetweenValues(i == 0 ? 0 : previousEdge + 1,
+                    DISTRIBUTION_EDGES_NANOS[i]);
+            previousEdge = DISTRIBUTION_EDGES_NANOS[i];
+        }
+        counts[counts.length - 1] = merged.getCountBetweenValues(previousEdge + 1, Long.MAX_VALUE);
+
+        long busiest = 0;
+        for (long count : counts) {
+            busiest = Math.max(busiest, count);
+        }
+
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"LATENCY", "COUNT", "SHARE", ""});
+        for (int i = 0; i < counts.length; i++) {
+            String range = i == counts.length - 1
+                    ? "> " + Numbers.latency(DISTRIBUTION_EDGES_NANOS[DISTRIBUTION_EDGES_NANOS.length - 1])
+                    : "<= " + Numbers.latency(DISTRIBUTION_EDGES_NANOS[i]);
+            rows.add(new String[] {
+                range,
+                Numbers.withSeparators(counts[i]),
+                Numbers.percent((double) counts[i] / total),
+                bar(counts[i], busiest),
+            });
+        }
+        return runnerName + " latency distribution\n" + render(rows);
+    }
+
+    private static String bar(long count, long busiest) {
+        if (busiest <= 0 || count <= 0) {
+            return "";
+        }
+        int width = (int) Math.max(1, Math.round((double) count / busiest * DISTRIBUTION_BAR_WIDTH));
+        return "\u2588".repeat(width);
     }
 
     public static String warmupNote(long warmupNanos) {

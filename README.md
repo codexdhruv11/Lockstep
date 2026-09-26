@@ -121,6 +121,39 @@ Maps each bucket to an estimated active-user count and reports the first **susta
 p99 above twice the healthy baseline for three consecutive buckets, so a GC pause is not mistaken
 for a capacity limit. It prints the assumption alongside the number, every time.
 
+### Many endpoints in one run
+
+`targets:` drives a weighted list of endpoints, so a page that calls five things is one run
+rather than five:
+
+```yaml
+http:
+  rate: 40
+  targets:
+    - method: GET
+      url: http://localhost:8080/api/products
+      weight: 50
+    - method: POST
+      url: http://localhost:8080/api/orders
+      body: '{"customer": 42}'
+      weight: 30
+    - method: GET
+      url: http://localhost:8080/api/slow
+      weight: 20
+```
+
+```
+http targets
+HTTP TARGETS          CALLS  SHARE  ERR  MEAN    P50    P95     P99
+t3 GET /api/slow      62     73.2%  0    267ms   255ms  298ms   300ms
+t1 GET /api/products  196    15.3%  0    17.7ms  7.7ms  52.2ms  57.7ms
+t2 POST /api/orders   118    11.0%  0    21.1ms  8.8ms  53.7ms  56.6ms
+```
+
+`target:` (one endpoint) still works exactly as before — **every reference config runs here
+unchanged**, which is the compatibility direction that matters. A config using `targets:` does not
+run under reference, because reference cannot do this.
+
 ### Per-query breakdown
 
 A database or Redis mix reports one row per statement as well as one row for the runner, so "the
@@ -236,6 +269,38 @@ scenario:
 One journey is one recorded operation, so the latency is what a user waits through. A failed step
 ends its journey — continuing would fire later requests with an uncaptured token and add load that
 describes the tool rather than the target. Per-step figures show which request in the flow is slow.
+
+### The distribution, not just the percentiles
+
+```sh
+lockstep run -c config.yaml --distribution
+```
+
+```
+LATENCY   COUNT  SHARE
+<= 5ms    20     5.0%   ████
+<= 10ms   215    53.8%  ████████████████████████████████████████
+<= 25ms   24     6.0%   ████
+<= 50ms   30     7.5%   ██████
+<= 100ms  53     13.3%  ██████████
+<= 500ms  62     15.5%  ████████████
+```
+
+That run's p50 is 9.1ms and its p90 is 254ms. Read as a curve, that looks like a long tail. It
+isn't — it is **two populations**, and the histogram is the only view that shows it. Buckets are
+fixed rather than derived from the data, so two runs can be compared.
+
+### What failed, not just how many
+
+```
+failures
+RUNNER  COUNT  FAILURE
+http    24     HTTP 404
+db      3      SQLException: canceling statement due to statement timeout
+```
+
+The distinct-message list is capped and the rest pooled, so a target emitting a unique message per
+failure cannot turn the error table into a memory leak.
 
 ### Reports and CI
 
@@ -357,6 +422,10 @@ of what this tool is for.
 - Thresholds are absolute cut-offs; nothing adapts to what is normal for your target.
 - `find-capacity` scales http, db and redis rates; a scenario-only config is refused rather than
   answered wrongly.
+- No bytes-in/bytes-out accounting. Counting response payloads needs a custom body subscriber on
+  the measurement hot path, and that is a change worth measuring rather than guessing at.
+- `CapacityFinder` cannot see strain that was present from the first bucket — it takes its
+  baseline from the run's own quiet quarter, and a run that was saturated throughout has none.
 - Without `--warmup`, a short run's first bucket can still produce a finding about the JVM.
 
 ## Build
@@ -365,7 +434,7 @@ Requires **Java 21** (virtual threads) and Maven.
 
 ```sh
 mvn clean package            # target/lockstep.jar
-mvn clean verify             # 294 tests; Postgres and Redis tests need Docker
+mvn clean verify             # 309 tests; Postgres and Redis tests need Docker
 ```
 
 Tests that need Docker skip themselves by name when it is unavailable, rather than passing

@@ -18,6 +18,7 @@ const out = {
   runners: global.__renderedText(global.__elements.get("runners")),
   spikes: global.__renderedText(global.__elements.get("spikes")),
   queries: global.__renderedText(global.__elements.get("queries")),
+  failures: global.__renderedText(global.__elements.get("failures")),
   plans: global.__renderedText(global.__elements.get("plans")),
   slowlog: global.__renderedText(global.__elements.get("slowlog"))
     + " " + global.__renderedText(global.__elements.get("slowlog-note")),

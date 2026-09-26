@@ -17,14 +17,15 @@ final class RunComparatorTest {
 
     private static RunReport.RunnerReport runner(String name, long p99Nanos, long p50Nanos, long count) {
         return new RunReport.RunnerReport(name, count, count, 0, 10.0, count, count, 0, 0, 0, 0, true, 0, 0,
-                p50Nanos, p50Nanos, p99Nanos - MS, p99Nanos, p99Nanos, p99Nanos,
-                Map.of("200", count), List.of());
+                p50Nanos, p50Nanos, p50Nanos, p99Nanos - MS, p99Nanos - MS, p99Nanos, p99Nanos, p99Nanos,
+                Map.of("200", count), Map.of(), List.of());
     }
 
     private static RunReport.RunnerReport runner(String name, long p99Nanos) {
         return new RunReport.RunnerReport(name, 100, 100, 0, 10.0, 100, 100, 0, 0, 0, 0, true, 0, 0,
-                p99Nanos / 2, p99Nanos / 2, p99Nanos - MS, p99Nanos, p99Nanos, p99Nanos,
-                Map.of("200", 100L), List.of());
+                p99Nanos / 2, p99Nanos / 2, p99Nanos / 2, p99Nanos - MS, p99Nanos - MS, p99Nanos,
+                p99Nanos, p99Nanos,
+                Map.of("200", 100L), Map.of(), List.of());
     }
 
     private static RunReport report(List<RunReport.RunnerReport> runners) {
