@@ -161,9 +161,9 @@ storage layer is slow" becomes "this one is 96% of it" in a single run:
 ```
 db queries
 QUERY                                                            CALLS  SHARE  ERR  MEAN   P50     P95     P99
-q1 WITH stats AS ( SELECT COUNT(*) AS total_signals, CO…  350    96.2%  0    103ms  81.8ms  243ms   386ms
-q2 SELECT s.id, s.sku, s.channel, s.direction, s.…  238    2.6%   0    4.1ms  1.3ms   13.9ms  55.1ms
-q3 SELECT id, name, handle, score, call_count F…  132    1.2%   0    3.4ms  1.4ms   12.1ms  43.8ms
+q1 WITH stats AS ( SELECT COUNT(*) AS total, COUNT(*) FILTER …  350    96.2%  0    103ms  81.8ms  243ms   386ms
+q2 SELECT o.id, o.customer, o.amount, o.status FROM orders o …  238    2.6%   0    4.1ms  1.3ms   13.9ms  55.1ms
+q3 SELECT id, name, region FROM customers WHERE active = true…  132    1.2%   0    3.4ms  1.4ms   12.1ms  43.8ms
 ```
 
 **SHARE** is the column to read first: share of total database time, calls × mean. A 2ms statement
@@ -223,7 +223,7 @@ the report:
 ```
 query plans (p99 above 100ms; taken after the run, with the load off)
 
-q1 WITH stats AS ( SELECT COUNT(*) AS total_signals, CO…
+q1 WITH stats AS ( SELECT COUNT(*) AS total, COUNT(*) FILTER …
   EXPLAIN (ANALYZE, BUFFERS)
   Aggregate  (actual time=101.884..101.885 rows=1 loops=1)
     ->  Seq Scan on orders  (actual rows=69720 loops=1)
@@ -453,5 +453,4 @@ compare/    run-to-run diff and the CI gate
 demo/       demo server and database seeder
 ```
 
-`docs/PITFALLS.md` explains the measurement traps this tool is built to avoid, including two
-defects in the reference implementation that are deliberately not reproduced here.
+`docs/PITFALLS.md` explains the measurement traps this tool is built to avoid.
