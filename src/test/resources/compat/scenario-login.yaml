@@ -1,6 +1,6 @@
 # Single scenario demo — login flow with extract + interpolate
 # Run: go run ./cmd/demoserver  (in one terminal, :8080)
-# Then: lockstep run -c config.scenario.yaml -o
+# Then: lockstep run -c config.scenario.yaml
 duration: 10s
 bucket_width: 1s
 concurrency: 10

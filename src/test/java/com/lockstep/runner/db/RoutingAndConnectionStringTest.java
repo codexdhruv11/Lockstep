@@ -67,8 +67,8 @@ final class RoutingAndConnectionStringTest {
     void mysqlAndSqliteFormsAreTranslated() {
         assertThat(ConnectionStrings.toJdbc("mysql://root:pw@db:3306/app", "mysql").url())
                 .isEqualTo("jdbc:mysql://db:3306/app");
-        assertThat(ConnectionStrings.toJdbc("/tmp/reference-load.db", "sqlite").url())
-                .isEqualTo("jdbc:sqlite:/tmp/reference-load.db");
+        assertThat(ConnectionStrings.toJdbc("/tmp/lockstep-load.db", "sqlite").url())
+                .isEqualTo("jdbc:sqlite:/tmp/lockstep-load.db");
         assertThat(ConnectionStrings.toJdbc("sqlite:///tmp/x.db", "sqlite").url())
                 .isEqualTo("jdbc:sqlite:/tmp/x.db");
     }

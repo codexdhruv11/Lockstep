@@ -1,6 +1,6 @@
 # Multiple weighted scenarios demo
 # Run: go run ./cmd/demoserver  (in one terminal, :8080)
-# Then: lockstep run -c config.scenarios.yaml -o           (HTML report)
+# Then: lockstep run -c config.scenarios.yaml                        (HTML report)
 # Or:   lockstep run -c config.scenarios.yaml --json out.json
 duration: 10s
 bucket_width: 1s

@@ -1,4 +1,4 @@
-# A configuration exercising every section the loader accepts.
+# Load-test configuration in the compatibility format.
 #
 # All runner sections are optional: omit any of `http`, `db`, or `redis` to run
 # only the others. At least one section must be present. Unknown keys are

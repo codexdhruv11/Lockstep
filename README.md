@@ -8,8 +8,8 @@ layer's latencies into the same time buckets, and compares them bucket by bucket
 latency curve that hides where the time went, you get three that line up — and a report that says
 which bucket a storage layer spiked in, and whether the application felt it.
 
-A Java 21 reimplementation of [reference]((the reference implementation)) (Go). Backend and
-CLI only, no web UI. Plain Java — no frameworks, and no external load-generator binary.
+Java 21, backend and CLI only, no web UI. Plain Java — no frameworks, and no external
+load-generator binary.
 
 ```
 $ lockstep run -c config.yaml
@@ -150,9 +150,8 @@ t1 GET /api/products  196    15.3%  0    17.7ms  7.7ms  52.2ms  57.7ms
 t2 POST /api/orders   118    11.0%  0    21.1ms  8.8ms  53.7ms  56.6ms
 ```
 
-`target:` (one endpoint) still works exactly as before — **every reference config runs here
-unchanged**, which is the compatibility direction that matters. A config using `targets:` does not
-run under reference, because reference cannot do this.
+`target:` (one endpoint) still works exactly as before, so an existing single-target config keeps
+working unchanged.
 
 ### Per-query breakdown
 

@@ -8,10 +8,10 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 final class ConfigLoaderTest {
-    private static final Path COMPAT = Path.of("..", "reference");
+    private static final Path COMPAT = Path.of("src", "test", "resources", "compat");
 
     @Test
-    void loadsReferenceRootConfigYaml() {
+    void loadsTheFullFeaturedConfig() {
         Config config = ConfigLoader.load(COMPAT.resolve("config.yaml"));
 
         assertThat(config.duration()).isEqualTo(15_000_000_000L);
@@ -35,7 +35,7 @@ final class ConfigLoaderTest {
 
     @Test
     void loadsLightExample() {
-        Config config = ConfigLoader.load(COMPAT.resolve("examples").resolve("light.yaml"));
+        Config config = ConfigLoader.load(COMPAT.resolve("light.yaml"));
 
         assertThat(config.duration()).isEqualTo(20_000_000_000L);
         assertThat(config.http().target().header().get("accept")).containsExactly("application/json");
@@ -46,18 +46,18 @@ final class ConfigLoaderTest {
 
     @Test
     void loadsHeavyExample() {
-        Config config = ConfigLoader.load(COMPAT.resolve("examples").resolve("heavy.yaml"));
+        Config config = ConfigLoader.load(COMPAT.resolve("heavy.yaml"));
 
         assertThat(config.concurrency()).isEqualTo(50);
         assertThat(config.db().target().driver()).isEqualTo("sqlite");
-        assertThat(config.db().target().conn()).isEqualTo("/tmp/reference-load.db");
+        assertThat(config.db().target().conn()).isEqualTo("/tmp/lockstep-load.db");
         assertThat(config.db().target().queries().get(1).type()).isEqualTo("write");
         assertThat(config.redis().target().queries()).hasSize(3);
     }
 
     @Test
     void loadsScenarioLoginExample() {
-        Config config = ConfigLoader.load(COMPAT.resolve("examples").resolve("scenario-login.yaml"));
+        Config config = ConfigLoader.load(COMPAT.resolve("scenario-login.yaml"));
 
         assertThat(config.http()).isNull();
         assertThat(config.scenario()).hasSize(1);
@@ -72,7 +72,7 @@ final class ConfigLoaderTest {
 
     @Test
     void loadsWeightedScenariosExample() {
-        Config config = ConfigLoader.load(COMPAT.resolve("examples").resolve("scenarios-weighted.yaml"));
+        Config config = ConfigLoader.load(COMPAT.resolve("scenarios-weighted.yaml"));
 
         assertThat(config.scenario()).hasSize(2);
         assertThat(config.scenario().get(0).weight()).isEqualTo(70);
