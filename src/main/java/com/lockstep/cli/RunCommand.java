@@ -51,6 +51,15 @@ public final class RunCommand implements Callable<Integer> {
             + "run's first moments; those buckets are still printed, just not treated as findings.")
     String warmup;
 
+    @Option(names = "--arrivals", description =
+            "Arrival model: constant (evenly paced) or poisson (exponential gaps, like real "
+            + "traffic). Poisson produces higher queueing delay at the same mean rate.")
+    String arrivals;
+
+    @Option(names = "--arrival-seed", description =
+            "Seed for poisson arrivals, so a run can be reproduced. 0 means random.")
+    long arrivalSeed;
+
     @Option(names = "--buckets", description = "Print the per-bucket table for each runner.")
     boolean showBuckets;
 
@@ -278,7 +287,10 @@ public final class RunCommand implements Callable<Integer> {
         long durationNanos = duration == null ? config.duration() : Durations.parseToNanos(duration);
         long rampNanos = ramp == null ? config.ramp() : Durations.parseToNanos(ramp);
         int workers = concurrency == null ? config.concurrency() : concurrency;
-        return new Config(durationNanos, config.bucketWidth(), rampNanos, workers,
+        String model = arrivals == null ? config.arrivals() : arrivals;
+        long seed = arrivalSeed != 0 ? arrivalSeed : config.arrivalSeed();
+        com.lockstep.core.Arrivals.parse(model);
+        return new Config(durationNanos, config.bucketWidth(), rampNanos, workers, model, seed,
                 config.http(), config.db(), config.redis(), config.scenario());
     }
 }

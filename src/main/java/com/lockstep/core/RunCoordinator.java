@@ -38,7 +38,8 @@ public final class RunCoordinator {
         int concurrency = config.concurrency() <= 0 ? RunContext.DEFAULT_CONCURRENCY : config.concurrency();
         List<Runner> runners = build(config, concurrency);
         RunContext context = RunContext.startingAfterSetup(
-                config.duration(), config.bucketWidth(), config.ramp(), config.concurrency());
+                config.duration(), config.bucketWidth(), config.ramp(), config.concurrency(),
+                0L, config.arrivalModel(), config.arrivalSeed());
         try {
             Map<String, PacedLoop.LoopResult> results = runAll(runners, context, progress);
             DbRunner db = first(runners, DbRunner.class);

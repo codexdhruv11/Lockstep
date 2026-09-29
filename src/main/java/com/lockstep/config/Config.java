@@ -13,10 +13,21 @@ public record Config(
         long bucketWidth,
         long ramp,
         int concurrency,
+        String arrivals,
+        long arrivalSeed,
         HttpConfig http,
         DbConfig db,
         RedisConfig redis,
         List<ScenarioConfig> scenario) {
+
+    public Config(long duration, long bucketWidth, long ramp, int concurrency,
+            HttpConfig http, DbConfig db, RedisConfig redis, List<ScenarioConfig> scenario) {
+        this(duration, bucketWidth, ramp, concurrency, "constant", 0L, http, db, redis, scenario);
+    }
+
+    public com.lockstep.core.Arrivals arrivalModel() {
+        return com.lockstep.core.Arrivals.parse(arrivals);
+    }
     public Config {
         scenario = canonical(scenario);
     }
@@ -26,7 +37,7 @@ public record Config(
     }
 
     public Config scaledBy(double multiplier) {
-        return new Config(duration, bucketWidth, ramp, concurrency,
+        return new Config(duration, bucketWidth, ramp, concurrency, arrivals, arrivalSeed,
                 http == null ? null : new HttpConfig(http.target(), scaleRate(http.rate(), multiplier)),
                 db == null ? null : new DbConfig(new DbConfig.Target(db.target().conn(),
                         db.target().driver(), db.target().queries(), db.target().poolSize()),
@@ -58,7 +69,8 @@ public record Config(
     }
 
     public Config withDuration(long durationNanos) {
-        return new Config(durationNanos, bucketWidth, ramp, concurrency, http, db, redis, scenario);
+        return new Config(durationNanos, bucketWidth, ramp, concurrency, arrivals, arrivalSeed,
+                http, db, redis, scenario);
     }
 
     @JsonCreator
@@ -67,6 +79,8 @@ public record Config(
             @JsonProperty("bucket_width") Object bucketWidth,
             @JsonProperty("ramp") Object ramp,
             @JsonProperty("concurrency") Integer concurrency,
+            @JsonProperty("arrivals") String arrivals,
+            @JsonProperty("arrival_seed") Long arrivalSeed,
             @JsonProperty("http") HttpConfig http,
             @JsonProperty("db") DbConfig db,
             @JsonProperty("redis") RedisConfig redis,
@@ -77,6 +91,8 @@ public record Config(
                 bucketWidth == null ? 0L : durationNanos(bucketWidth, "bucket_width"),
                 ramp == null ? 0L : durationNanos(ramp, "ramp"),
                 concurrency == null ? 0 : concurrency,
+                arrivals == null ? "constant" : arrivals,
+                arrivalSeed == null ? 0L : arrivalSeed,
                 http,
                 db,
                 redis,

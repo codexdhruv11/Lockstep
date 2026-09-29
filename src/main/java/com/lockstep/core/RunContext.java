@@ -9,12 +9,23 @@ public record RunContext(
         long bucketWidthNanos,
         long rampNanos,
         int concurrency,
-        long warmupNanos) {
+        long warmupNanos,
+        Arrivals arrivals,
+        long arrivalSeed) {
+
+    public RunContext(long startNanoTime, Instant startWallClock, long durationNanos,
+            long bucketWidthNanos, long rampNanos, int concurrency, long warmupNanos) {
+        this(startNanoTime, startWallClock, durationNanos, bucketWidthNanos, rampNanos,
+                concurrency, warmupNanos, Arrivals.CONSTANT, 0L);
+    }
     public static final long DEFAULT_BUCKET_WIDTH_NANOS = 1_000_000_000L;
 
     public static final int DEFAULT_CONCURRENCY = 10;
 
     public RunContext {
+        if (arrivals == null) {
+            arrivals = Arrivals.CONSTANT;
+        }
         if (durationNanos <= 0) {
             throw new IllegalArgumentException("durationNanos must be positive, got " + durationNanos);
         }
@@ -60,9 +71,16 @@ public record RunContext(
 
     public static RunContext startingAfterSetup(long durationNanos, long bucketWidthNanos,
             long rampNanos, int concurrency, long warmupNanos) {
+        return startingAfterSetup(durationNanos, bucketWidthNanos, rampNanos, concurrency,
+                warmupNanos, Arrivals.CONSTANT, 0L);
+    }
+
+    public static RunContext startingAfterSetup(long durationNanos, long bucketWidthNanos,
+            long rampNanos, int concurrency, long warmupNanos, Arrivals arrivals, long seed) {
         return new RunContext(System.nanoTime() + SETUP_GRACE_NANOS,
                 Instant.now().plusNanos(SETUP_GRACE_NANOS),
-                durationNanos, bucketWidthNanos, rampNanos, concurrency, warmupNanos);
+                durationNanos, bucketWidthNanos, rampNanos, concurrency, warmupNanos,
+                arrivals, seed);
     }
 
     public long elapsedNanos() {

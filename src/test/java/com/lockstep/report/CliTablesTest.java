@@ -116,7 +116,18 @@ final class CliTablesTest {
     @Test
     void headerDescribesTheRunParameters() {
         String header = CliTables.runHeader(resultWith(Map.of("http", loop(1, 0, MS, 1, 0, 0))));
-        assertThat(header).isEqualTo("duration 10s · bucket 1s · concurrency 10 · ramp 3s");
+        assertThat(header)
+                .isEqualTo("duration 10s · bucket 1s · concurrency 10 · ramp 3s · arrivals constant");
+    }
+
+    @Test
+    void theHeaderStatesTheArrivalModelBecauseItChangesTheNumbers() {
+        RunContext poisson = new RunContext(0, Instant.EPOCH, 10 * SECOND, SECOND, 3 * SECOND, 10, 0,
+                com.lockstep.core.Arrivals.POISSON, 42);
+        var result = new RunCoordinator.RunResult(poisson,
+                Map.of("http", loop(1, 0, MS, 1, 0, 0)), null);
+
+        assertThat(CliTables.runHeader(result)).endsWith("arrivals poisson");
     }
 
     @Test

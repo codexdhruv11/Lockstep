@@ -30,7 +30,8 @@ public final class PacedLoop {
 
     public static LoopResult run(RunContext context, int ratePerSecond, Operation operation,
             RunProgress.Counter progress) {
-        Pacer pacer = new Pacer(ratePerSecond, context.rampNanos());
+        Pacer pacer = new Pacer(ratePerSecond, context.rampNanos(),
+                context.arrivals(), context.arrivalSeed());
         int buckets = HistogramRecorder.bucketsFor(context.durationNanos(), context.bucketWidthNanos());
         HistogramRecorder recorder = new HistogramRecorder(context.bucketWidthNanos(), buckets);
 

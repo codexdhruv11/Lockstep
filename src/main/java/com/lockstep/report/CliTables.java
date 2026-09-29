@@ -446,11 +446,12 @@ public final class CliTables {
 
     public static String runHeader(RunCoordinator.RunResult result) {
         var context = result.context();
-        return "duration %s · bucket %s · concurrency %d · ramp %s".formatted(
+        return "duration %s · bucket %s · concurrency %d · ramp %s · arrivals %s".formatted(
                 com.lockstep.util.Durations.formatNanos(context.durationNanos()),
                 com.lockstep.util.Durations.formatNanos(context.bucketWidthNanos()),
                 context.concurrency(),
-                com.lockstep.util.Durations.formatNanos(context.rampNanos()));
+                com.lockstep.util.Durations.formatNanos(context.rampNanos()),
+                context.arrivals().label());
     }
 
     public static String precisionNote() {

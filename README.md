@@ -269,6 +269,39 @@ One journey is one recorded operation, so the latency is what a user waits throu
 ends its journey — continuing would fire later requests with an uncaptured token and add load that
 describes the tool rather than the target. Per-step figures show which request in the flow is slow.
 
+### Arrivals: constant or Poisson
+
+```sh
+lockstep run -c config.yaml --arrivals poisson --arrival-seed 42
+```
+
+A constant-rate pacer fires at exactly `1/rate` intervals. Real traffic does not: arrivals are a
+Poisson process, with exponentially distributed gaps. That difference is not cosmetic — evenly
+spaced arrivals into a queue produce materially less queueing delay than bursty ones at the same
+mean rate, so **a constant-rate load test systematically under-reports the tail.**
+
+Measured against the demo server's 250ms endpoint, 40/s mean, 12 workers (about 83% utilisation),
+20s, warm-up excluded:
+
+| arrivals | delivered | p50 | p99 |
+|---|---:|---:|---:|
+| constant | 800 | 296ms | **302ms** |
+| poisson, seed 1234 | 760 | 333ms | 642ms |
+| poisson, seed 7 | 824 | 549ms | 793ms |
+| poisson, seed 99 | 835 | 822ms | 1.2s |
+| poisson, seed 42 | 879 | 1.2s | **2.0s** |
+
+Constant arrivals produce a p50 and p99 six milliseconds apart — the distribution is nearly flat,
+because every request meets the same queue. Every Poisson seed is worse, by between two and six
+times at the tail.
+
+It is not simply extra load: seed 1234 delivered **fewer** requests than the constant run (760 vs
+800) and still doubled the p99. What the tail responds to is burstiness, and a constant pacer has
+none by construction.
+
+`--arrival-seed` makes a Poisson schedule reproducible, so a regression can be re-measured against
+the same arrival pattern rather than a new random one.
+
 ### The distribution, not just the percentiles
 
 ```sh
@@ -317,7 +350,7 @@ budget is how much extra waiting a user tolerates, so 5ms→40ms passes and 900m
 ```
 lockstep find-capacity [-c config.yaml] [--step 10s] [--max-steps 9] [--concurrency 50]
 lockstep run [-c config.yaml] [--duration 30s] [--ramp 10s] [--concurrency 50]
-                [--warmup 5s] [--no-explain]
+                [--warmup 5s] [--no-explain] [--arrivals constant|poisson] [--arrival-seed N]
                 [--http-threshold 150ms] [--db-threshold 250ms] [--redis-threshold 80ms]
                 [--json results.json] [--report report.html] [--no-report] [--buckets]
                 [--no-progress]
@@ -434,7 +467,7 @@ Requires **Java 21** (virtual threads) and Maven.
 
 ```sh
 mvn clean package            # target/lockstep.jar
-mvn clean verify             # 313 tests; Postgres and Redis tests need Docker
+mvn clean verify             # 324 tests; Postgres and Redis tests need Docker
 ```
 
 Tests that need Docker skip themselves by name when it is unavailable, rather than passing

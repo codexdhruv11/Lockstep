@@ -71,7 +71,7 @@ public final class ConfigLoader {
 
     private static final Map<String, Set<String>> KNOWN_KEYS_BY_PATH = Map.ofEntries(
             Map.entry("", Set.of("duration", "bucket_width", "ramp", "concurrency",
-                    "http", "db", "redis", "scenario")),
+                    "arrivals", "arrival_seed", "http", "db", "redis", "scenario")),
             Map.entry("http", Set.of("rate", "target", "targets")),
             Map.entry("db", Set.of("rate", "target")),
             Map.entry("redis", Set.of("rate", "target")),
