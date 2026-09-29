@@ -269,6 +269,38 @@ One journey is one recorded operation, so the latency is what a user waits throu
 ends its journey — continuing would fire later requests with an uncaptured token and add load that
 describes the tool rather than the target. Per-step figures show which request in the flow is slow.
 
+### The generator audits itself
+
+Every load tester blames the target. This one records its own JVM pauses during the run and checks
+whether any of them line up with the spikes it just reported:
+
+```
+generator self-audit
+TIME   PAUSED  EVENT          NOTE
+00:07  340ms   GCPhasePause   overlaps a reported spike
+00:11  95ms    GCPhasePause
+  this process was paused for 435ms in total, across 2 GC pauses
+  1 of these falls in a bucket reported as a storage spike above - that latency was at
+  least partly this process, not the target
+```
+
+A 340ms stop-the-world pause in the generator is indistinguishable, from the outside, from 340ms
+of slowness in the target: the request was scheduled, the clock ran, the response came back late.
+The difference is that one of them is the measuring instrument. Flight Recorder is running
+anyway — reading it costs nothing and turns an invisible error into a labelled one.
+
+On a clean run it says so explicitly rather than printing nothing:
+
+```
+generator self-audit
+  no JVM pause above 10ms in this run; the latencies above are the target's, not this process's
+```
+
+That distinction matters: silence would be indistinguishable from the recording having failed, so
+an unreadable recording reports *unavailable* with the reason instead of looking clean.
+
+`--no-self-audit` turns it off.
+
 ### Arrivals: constant or Poisson
 
 ```sh
@@ -351,6 +383,7 @@ budget is how much extra waiting a user tolerates, so 5ms→40ms passes and 900m
 lockstep find-capacity [-c config.yaml] [--step 10s] [--max-steps 9] [--concurrency 50]
 lockstep run [-c config.yaml] [--duration 30s] [--ramp 10s] [--concurrency 50]
                 [--warmup 5s] [--no-explain] [--arrivals constant|poisson] [--arrival-seed N]
+                [--no-self-audit]
                 [--http-threshold 150ms] [--db-threshold 250ms] [--redis-threshold 80ms]
                 [--json results.json] [--report report.html] [--no-report] [--buckets]
                 [--no-progress]
@@ -467,7 +500,7 @@ Requires **Java 21** (virtual threads) and Maven.
 
 ```sh
 mvn clean package            # target/lockstep.jar
-mvn clean verify             # 324 tests; Postgres and Redis tests need Docker
+mvn clean verify             # 332 tests; Postgres and Redis tests need Docker
 ```
 
 Tests that need Docker skip themselves by name when it is unavailable, rather than passing

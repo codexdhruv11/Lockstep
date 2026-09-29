@@ -60,6 +60,12 @@ public final class RunCommand implements Callable<Integer> {
             "Seed for poisson arrivals, so a run can be reproduced. 0 means random.")
     long arrivalSeed;
 
+    @Option(names = "--no-self-audit", description =
+            "Skip recording this process's own GC and safepoint pauses. By default the tool "
+            + "records them and flags any that overlap a spike it reported, because a pause in "
+            + "the generator looks exactly like slowness in the target.")
+    boolean noSelfAudit;
+
     @Option(names = "--buckets", description = "Print the per-bucket table for each runner.")
     boolean showBuckets;
 
@@ -124,6 +130,9 @@ public final class RunCommand implements Callable<Integer> {
             return EXIT_CONFIG_ERROR;
         }
 
+        com.lockstep.analysis.SelfAudit selfAudit =
+                noSelfAudit ? null : com.lockstep.analysis.SelfAudit.start();
+
         RunProgress progress = new RunProgress();
         RunCoordinator.RunResult result;
         try (LiveProgress live = new LiveProgress(progress, config.duration(), System.err)) {
@@ -140,6 +149,14 @@ public final class RunCommand implements Callable<Integer> {
         } catch (RuntimeException e) {
             err.println(Ansi.error(e.getMessage() == null ? e.toString() : e.getMessage()));
             return EXIT_RUN_FAILED;
+        }
+
+        com.lockstep.analysis.SelfAudit.Report auditReport = null;
+        if (selfAudit != null) {
+            auditReport = selfAudit.stop(result.context().startWallClock(),
+                    result.context().bucketWidthNanos(),
+                    com.lockstep.stats.HistogramRecorder.bucketsFor(
+                            result.context().durationNanos(), result.context().bucketWidthNanos()));
         }
 
         out.println(CliTables.runHeader(result));
@@ -238,6 +255,13 @@ public final class RunCommand implements Callable<Integer> {
                 out.print(spikes);
             }
         }
+        String selfAuditOut = CliTables.selfAuditTable(auditReport, correlation,
+                result.context().bucketWidthNanos());
+        if (!selfAuditOut.isEmpty()) {
+            out.println();
+            out.print(selfAuditOut);
+        }
+
         RunReport report = RunReport.from(result, Version.value(), correlation, capacity);
         String slowlog = CliTables.slowlogSection(report.slowlog());
         if (!slowlog.isEmpty()) {

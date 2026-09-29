@@ -438,6 +438,65 @@ public final class CliTables {
         return "\u2588".repeat(width);
     }
 
+    public static String selfAuditTable(com.lockstep.analysis.SelfAudit.Report audit,
+            com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation,
+            long bucketWidthNanos) {
+        if (audit == null) {
+            return "";
+        }
+        if (!audit.available()) {
+            return "generator self-audit\n"
+                    + Ansi.dim("  unavailable: " + audit.unavailableReason()) + "\n";
+        }
+        if (!audit.hasPauses()) {
+            return "generator self-audit\n"
+                    + Ansi.dim("  no JVM pause above "
+                        + Numbers.latency(com.lockstep.analysis.SelfAudit.SIGNIFICANT_PAUSE_NANOS)
+                        + " in this run; the latencies above are the target's, not this process's")
+                    + "\n";
+        }
+
+        java.util.Set<Integer> spikeBuckets = new java.util.HashSet<>();
+        if (correlation != null) {
+            for (var spike : correlation.spikes()) {
+                spikeBuckets.add(spike.bucketIndex());
+            }
+        }
+
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"TIME", "PAUSED", "EVENT", "NOTE"});
+        int contaminated = 0;
+        for (var pause : audit.longestPauses()) {
+            boolean overlapsSpike = spikeBuckets.contains(pause.bucketIndex());
+            if (overlapsSpike) {
+                contaminated++;
+            }
+            rows.add(new String[] {
+                Numbers.clock(pause.bucketIndex() * bucketWidthNanos),
+                Numbers.latency(pause.durationNanos()),
+                shortEventName(pause.eventName()),
+                overlapsSpike ? "overlaps a reported spike" : "",
+            });
+        }
+
+        StringBuilder out = new StringBuilder("generator self-audit\n");
+        out.append(render(rows));
+        out.append(Ansi.dim("  this process was paused for "
+                + Numbers.latency(audit.totalPausedNanos())
+                + " in total, across " + audit.gcPauseCount() + " GC pauses\n"));
+        if (contaminated > 0) {
+            out.append(Ansi.dim("  " + contaminated + " of these fall in a bucket reported as a "
+                    + "storage spike above - that latency was at least partly this process, "
+                    + "not the target\n"));
+        }
+        return out.toString();
+    }
+
+    private static String shortEventName(String jfrName) {
+        int dot = jfrName.lastIndexOf('.');
+        return dot < 0 ? jfrName : jfrName.substring(dot + 1);
+    }
+
     public static String warmupNote(long warmupNanos) {
         return Ansi.dim("first " + com.lockstep.util.Durations.formatNanos(warmupNanos)
                 + " treated as warm-up: still measured and printed above, excluded from spikes "
