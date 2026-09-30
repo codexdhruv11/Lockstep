@@ -24,6 +24,7 @@ import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.junit.jupiter.api.Tag;
 
 /**
  * Drives a deliberately N+1 HTTP endpoint and asserts the observer names it.
@@ -32,6 +33,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * statistics unconditionally. That makes the counts exact here and is the reason this test is
  * about the arithmetic rather than about the lower-bound behaviour a pooled target would show.
  */
+@Tag("container")
 final class TargetObserverPostgresTest {
     private static final long MS = 1_000_000L;
     private static final long SECOND = 1_000_000_000L;

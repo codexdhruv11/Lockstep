@@ -1,0 +1,83 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.4.0)"
+        required: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # Releasing an artifact whose tests were never run is how a broken binary reaches someone
+      # else's machine. The fast set gates the release; the container suite runs nightly.
+      - name: build and test
+        run: mvn -B --no-transfer-progress verify -DexcludedGroups=container
+
+      # A real end-to-end run against the bundled demo server, and the exit code is checked.
+      # Running a config whose target is absent would only prove the jar starts.
+      - name: smoke test the artifact that will be published
+        run: |
+          set -o pipefail
+          java -jar target/lockstep.jar version
+          java -jar target/lockstep.jar --help > /dev/null
+
+          java -jar target/lockstep.jar demo-server &
+          demo=$!
+          trap 'kill $demo 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:8080/api/products && break
+            sleep 1
+          done
+
+          java -jar target/lockstep.jar run -c examples/scenario-login.yaml \
+            --duration 5s --no-report --no-progress --json smoke.json | tee smoke.txt
+
+          # The journey must actually succeed. A published binary that runs and reports failures
+          # is worse than one that does not run, because it looks like it worked.
+          grep -q "100.0%" smoke.txt || {
+            echo "smoke test did not reach 100% success:" >&2
+            cat smoke.txt >&2
+            exit 1
+          }
+          test -s smoke.json || { echo "no JSON was written" >&2; exit 1; }
+
+      - name: stage the artifacts
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          mkdir -p dist
+          cp target/lockstep.jar "dist/lockstep-${TAG}.jar"
+          cp bin/lockstep bin/lockstep.bat dist/
+          (cd dist && sha256sum ./* > SHA256SUMS)
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            --title "lockstep $TAG" \
+            --notes "Requires Java 21 or later.
+
+          \`\`\`
+          java -jar lockstep-$TAG.jar --help
+          \`\`\`
+
+          Or put \`lockstep\` (or \`lockstep.bat\` on Windows) next to the jar and run \`lockstep run -c config.yaml\`.
+
+          Verify the download against \`SHA256SUMS\`." \
+            dist/*

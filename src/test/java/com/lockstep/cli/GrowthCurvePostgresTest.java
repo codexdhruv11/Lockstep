@@ -16,7 +16,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 import picocli.CommandLine;
+import org.junit.jupiter.api.Tag;
 
+@Tag("container")
 final class GrowthCurvePostgresTest {
 
     private record Run(int exitCode, String out, String err) {}

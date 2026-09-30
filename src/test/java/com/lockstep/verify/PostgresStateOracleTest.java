@@ -19,6 +19,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.junit.jupiter.api.Tag;
 
 /**
  * Forces the database into specific states so that conclusions which have only ever been produced
@@ -32,6 +33,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * <p>So: hold a row lock and drive updates at the locked row, and shrink {@code shared_buffers}
  * until a growing table demonstrably outgrows it.
  */
+@Tag("container")
 final class PostgresStateOracleTest {
     private static final long MS = 1_000_000L;
     private static final long SECOND = 1_000_000_000L;

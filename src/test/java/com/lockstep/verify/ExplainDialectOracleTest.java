@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.junit.jupiter.api.Tag;
 
 /**
  * Verifies the per-driver {@code EXPLAIN} forms against real servers, and one safety property that
@@ -33,6 +34,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * by {@code RoutingAndConnectionStringTest}; no MySQL server has ever run these statements. See
  * the note at the foot of this class.
  */
+@Tag("container")
 final class ExplainDialectOracleTest {
     private static final long MS = 1_000_000L;
     private static final long SECOND = 1_000_000_000L;

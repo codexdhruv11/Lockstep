@@ -14,7 +14,9 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.junit.jupiter.api.Tag;
 
+@Tag("container")
 final class BottleneckSamplerPostgresTest {
     private static final long MS = 1_000_000L;
     private static final long SECOND = 1_000_000_000L;

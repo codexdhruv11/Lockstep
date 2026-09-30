@@ -33,6 +33,35 @@ report written to report.html
 percentiles accurate to ~1.0% (histogram precision)
 ```
 
+## Install
+
+**Requires Java 21 or later.** Virtual threads are load-bearing, so 17 will not do.
+
+### Download a release
+
+Grab `lockstep-<version>.jar` from the releases page, plus the `lockstep` launcher if you want it
+on your PATH:
+
+```sh
+java -jar lockstep-v0.4.0.jar --help
+
+# or, with the launcher beside the jar:
+./lockstep --help
+```
+
+One self-contained jar. Nothing is installed on the machine under test, there is no agent and no
+daemon. Check the download against the published `SHA256SUMS`.
+
+### Or build it
+
+```sh
+mvn clean package -DskipTests     # builds target/lockstep.jar
+./bin/lockstep --help
+```
+
+Running the tests needs Docker, because the integration and oracle suites start real Postgres and
+Redis containers. `mvn test -DexcludedGroups=container` skips those and takes about a minute.
+
 ## Try it in three commands
 
 No database, no target, nothing to set up:
@@ -44,6 +73,36 @@ java -jar target/lockstep.jar run -c examples/scenario-login.yaml
 ```
 
 That runs a two-step login journey against the demo server and writes `report.html`. Open it.
+
+## The workflow on a real target
+
+```sh
+# 1. find the rate at which it stops keeping up, rather than guessing one
+lockstep find-capacity -c config.yaml --step=15s
+
+# 2. measure at a rate you chose, watching the target's own database
+lockstep run -c config.yaml \
+    --observe-db "postgres://user:pw@host:5432/appdb" \
+    --warmup 10s --json run.json
+
+# 3. gate CI on it: non-zero exit only on a change larger than the runs' own noise
+lockstep compare baseline.json run.json --budget 300ms
+
+# 4. ask when it will break. This one WRITES, so point it at a throwaway database
+lockstep growth-curve -c config.yaml --table signals \
+    --seed "INSERT INTO signals (payload) SELECT repeat('x',200) FROM generate_series(1,{{n}})" \
+    --steps 25000,50000,100000,200000 --budget 500ms --rows-per-day 2000 --allow-writes
+```
+
+Three flags do most of the work of not fooling yourself:
+
+- `--warmup 10s` — the JVM compiles itself during a run's opening seconds, and those buckets
+  should not count as findings.
+- `--observe-db` — reads the target's own statistics views, so the report can say how many
+  statements it ran per request and what bounded it. This is what catches an endpoint that is
+  fast for the wrong reason.
+- `--arrivals poisson` — constant pacing understates queueing at the same mean rate, because real
+  traffic arrives in clumps.
 
 ## What it does
 

@@ -1,0 +1,36 @@
+#!/usr/bin/env sh
+# Runs the lockstep jar sitting beside this script, so the tool can be used as `lockstep run ...`
+# rather than `java -jar ...`. Put both in the same directory and put that directory on PATH.
+set -e
+
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# Accept either the release name (lockstep-v0.4.0.jar) or a local build (target/lockstep.jar).
+jar=""
+for candidate in "$dir"/lockstep-*.jar "$dir"/lockstep.jar "$dir"/../target/lockstep.jar; do
+  if [ -f "$candidate" ]; then
+    jar="$candidate"
+    break
+  fi
+done
+
+if [ -z "$jar" ]; then
+  echo "lockstep: no jar found next to $0" >&2
+  echo "  expected lockstep.jar, lockstep-<version>.jar, or ../target/lockstep.jar" >&2
+  exit 1
+fi
+
+if ! command -v java >/dev/null 2>&1; then
+  echo "lockstep: java not found on PATH. Java 21 or later is required." >&2
+  echo "  Virtual threads are load-bearing here, so 17 will not do." >&2
+  exit 1
+fi
+
+# Fail with an explanation rather than an UnsupportedClassVersionError stack trace.
+version=$(java -version 2>&1 | head -1 | sed -n 's/.*version "\([0-9]*\).*/\1/p')
+if [ -n "$version" ] && [ "$version" -lt 21 ] 2>/dev/null; then
+  echo "lockstep: Java $version found, but 21 or later is required." >&2
+  exit 1
+fi
+
+exec java ${LOCKSTEP_JAVA_OPTS:-} -jar "$jar" "$@"

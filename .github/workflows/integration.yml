@@ -1,0 +1,35 @@
+name: integration
+
+# The container and oracle suites: real Postgres and Redis through Testcontainers. Kept off the
+# push path because they are slow and sensitive to how loaded the runner is — the assertions are
+# written against invariants rather than values for exactly that reason, but twenty minutes per
+# push is still the wrong trade.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: run every test, including the container and oracle suites
+        run: mvn -B --no-transfer-progress verify
+
+      - name: publish the oracle verification ledger
+        if: always()
+        run: |
+          echo '## Oracle verification' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -h -A12 'oracle verification' target/surefire-reports/*-output.txt \
+            2>/dev/null >> "$GITHUB_STEP_SUMMARY" || echo '(no ledger captured)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

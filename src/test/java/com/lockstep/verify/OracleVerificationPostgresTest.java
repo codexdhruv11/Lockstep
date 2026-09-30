@@ -30,6 +30,7 @@ import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.junit.jupiter.api.Tag;
 
 /**
  * Checks Lockstep's reported numbers against a database whose every relevant property is known
@@ -49,6 +50,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * <p>Each check prints expected against reported, so a failure shows the discrepancy rather than
  * only that one existed.
  */
+@Tag("container")
 final class OracleVerificationPostgresTest {
     private static final long MS = 1_000_000L;
     private static final long SECOND = 1_000_000_000L;

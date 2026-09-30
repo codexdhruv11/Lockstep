@@ -16,6 +16,8 @@
   -->
   <properties>
     <maven.compiler.release>21</maven.compiler.release>
+    <test.groups></test.groups>
+    <test.excludedGroups></test.excludedGroups>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
     <picocli.version>4.7.6</picocli.version>
@@ -136,7 +138,19 @@
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-shade-plugin</artifactId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <!-- Tests needing Docker are tagged "container". Excluding them gives a fast local
+               loop: mvn test -DexcludedGroups=container. CI runs the fast set on every push and
+               the container set on a schedule, because a twenty-minute job that goes red on a
+               busy runner is a job people learn to ignore. -->
+          <groups>${test.groups}</groups>
+          <excludedGroups>${test.excludedGroups}</excludedGroups>
+        </configuration>
+      </plugin>
+      <plugin>
+      <artifactId>maven-shade-plugin</artifactId>
         <version>3.6.0</version>
         <executions>
           <execution>

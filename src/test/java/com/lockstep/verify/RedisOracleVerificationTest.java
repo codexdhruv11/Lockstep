@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
+import org.junit.jupiter.api.Tag;
 
 /**
  * Checks the Redis runner's reported figures against a server whose behaviour is dictated.
@@ -29,6 +30,7 @@ import org.testcontainers.utility.DockerImageName;
  * That watermark has never been verified against a server that already had entries in its
  * slowlog, which is exactly the case it exists for.
  */
+@Tag("container")
 final class RedisOracleVerificationTest {
     private static final long MS = 1_000_000L;
     private static final long SECOND = 1_000_000_000L;
