@@ -144,10 +144,13 @@ public final class RunCommand implements Callable<Integer> {
                 noSelfAudit ? null : com.lockstep.analysis.SelfAudit.start();
 
         com.lockstep.runner.db.TargetObserver observer = null;
+        com.lockstep.runner.db.BottleneckSampler sampler = null;
         if (observeDb != null) {
             try {
                 observer = com.lockstep.runner.db.TargetObserver.open(observeDb, observeDriver);
                 observer.before();
+                sampler = com.lockstep.runner.db.BottleneckSampler.open(observeDb, observeDriver);
+                sampler.start();
             } catch (RuntimeException e) {
                 err.println(Ansi.error(e.getMessage()));
                 return EXIT_CONFIG_ERROR;
@@ -170,6 +173,13 @@ public final class RunCommand implements Callable<Integer> {
         } catch (RuntimeException e) {
             err.println(Ansi.error(e.getMessage() == null ? e.toString() : e.getMessage()));
             return EXIT_RUN_FAILED;
+        }
+
+        com.lockstep.analysis.Bottleneck bottleneck = null;
+        if (sampler != null) {
+            try (var closing = sampler) {
+                bottleneck = closing.stop();
+            }
         }
 
         com.lockstep.analysis.TargetQueries targetQueries = null;
@@ -218,6 +228,11 @@ public final class RunCommand implements Callable<Integer> {
         if (!targetSection.isEmpty()) {
             out.println();
             out.print(targetSection);
+        }
+        String bottleneckSection = CliTables.bottleneckTable(bottleneck);
+        if (!bottleneckSection.isEmpty()) {
+            out.println();
+            out.print(bottleneckSection);
         }
 
         List<com.lockstep.stats.Bucket> appTimeline = SpikeCorrelator.appTimelineOf(result);

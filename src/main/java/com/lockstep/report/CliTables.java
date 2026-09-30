@@ -518,6 +518,78 @@ public final class CliTables {
                 .formatted(Numbers.percent(HistogramRecorder.PERCENTILE_PRECISION)));
     }
 
+    public static String bottleneckTable(com.lockstep.analysis.Bottleneck bottleneck) {
+        if (bottleneck == null) {
+            return "";
+        }
+        if (!bottleneck.available()) {
+            return "bottleneck\n" + Ansi.dim("  unavailable — "
+                    + bottleneck.unavailableReason() + "\n");
+        }
+
+        StringBuilder out = new StringBuilder("bottleneck\n");
+        out.append(("  %s samples · busy backends mean %.1f, peak %d")
+                .formatted(Numbers.withSeparators(bottleneck.samples()),
+                        bottleneck.meanActiveBackends(), bottleneck.maxActiveBackends()));
+        if (bottleneck.serverMaxConnections() > 0) {
+            out.append(" · server max_connections ")
+                    .append(Numbers.withSeparators(bottleneck.serverMaxConnections()));
+        }
+        out.append('\n');
+
+        if (bottleneck.totalWaitObservations() > 0) {
+            List<String[]> rows = new ArrayList<>();
+            rows.add(new String[] {"WAITING ON", "SHARE", "SAMPLES"});
+            int total = bottleneck.totalWaitObservations();
+            for (var event : bottleneck.topWaitEvents(6)) {
+                rows.add(new String[] {
+                    event.getKey(),
+                    Numbers.percent((double) event.getValue() / total),
+                    Numbers.withSeparators(event.getValue()),
+                });
+            }
+            out.append(render(rows));
+        }
+
+        out.append(verdictLine(bottleneck));
+        out.append(Ansi.dim("  sampled every "
+                + com.lockstep.util.Durations.formatNanos(
+                        com.lockstep.analysis.Bottleneck.SAMPLE_INTERVAL_MILLIS * 1_000_000L)
+                + ", so this is a statistical picture rather than a census, and it covers every "
+                + "client of this database rather than only this run\n"));
+        return out.toString();
+    }
+
+    private static String verdictLine(com.lockstep.analysis.Bottleneck bottleneck) {
+        var verdict = bottleneck.verdict();
+        String plateau = ("  busy backends sat at %d in %s of samples")
+                .formatted(bottleneck.plateauBackends(),
+                        Numbers.percent(bottleneck.plateauShare()));
+        return switch (verdict) {
+            case CONNECTIONS -> Ansi.accent("! bounded by connections")
+                    + ("  — %s, which is almost certainly the client's pool size: work was "
+                    + "queued waiting for a connection rather than for the database\n")
+                    .formatted(plateau.trim());
+            case STORAGE_IO -> Ansi.accent("! bounded by storage")
+                    + ("  — backends were waiting on disk in %s of observations; the working set "
+                    + "no longer fits in cache\n")
+                    .formatted(Numbers.percent(bottleneck.shareOfWaits("IO")));
+            case LOCK_CONTENTION -> Ansi.accent("! bounded by lock contention")
+                    + ("  — backends were blocked on each other in %s of observations; they are "
+                    + "competing for the same rows\n")
+                    .formatted(Numbers.percent(bottleneck.shareOfWaits("Lock")));
+            case CPU -> Ansi.accent("! bounded by the database's CPU")
+                    + ("  — backends were running rather than waiting in %s of observations; the "
+                    + "queries themselves are the cost\n")
+                    .formatted(Numbers.percent(
+                            bottleneck.shareOfWaits(com.lockstep.analysis.Bottleneck.RUNNING)));
+            case NOT_SATURATED ->
+                    "  nothing was near a limit — no plateau held and no single wait dominated\n";
+            case UNKNOWN -> Ansi.dim(
+                    "  too few samples to attribute a bottleneck (needs at least 3)\n");
+        };
+    }
+
     public static String targetQueriesTable(com.lockstep.analysis.TargetQueries queries) {
         if (queries == null) {
             return "";
@@ -740,6 +812,13 @@ public final class CliTables {
         if (curve.budgetAlreadyExceeded(budgetNanos)) {
             return Ansi.accent("! the service-time budget of " + Numbers.latency(budgetNanos)
                     + " is already exceeded at the smallest measurement\n");
+        }
+        if (curve.budgetBeyondExtrapolationRange(budgetNanos)) {
+            return ("  budget %s: not reached within %.0f× the largest measurement (%s rows), so "
+                    + "no crossing is reported — the curve is too flat to place one\n").formatted(
+                            Numbers.latency(budgetNanos),
+                            com.lockstep.analysis.GrowthCurve.MAX_EXTRAPOLATION_FACTOR,
+                            Numbers.withSeparators(curve.largestMeasuredRows()));
         }
         long atBudget = curve.rowsAtBudget(budgetNanos);
         if (atBudget <= 0) {

@@ -27,6 +27,18 @@ public record GrowthCurve(
     /** Fewer points than this and there is no curve, only a line through noise. */
     public static final int MIN_POINTS = 3;
 
+    /**
+     * How far past the largest measured row count a crossing may be reported.
+     *
+     * <p>A good fit is not a licence to extrapolate without limit. Measured here: an indexed
+     * lookup over 25,000 to 100,000 rows fitted rows^0.20 at R² 0.982 — a real fit on a nearly
+     * flat line, 2.0ms to 2.7ms — and solving it for a 500ms budget gave 22 quadrillion rows.
+     * The arithmetic was right and the answer was worthless, because nothing in three
+     * measurements spanning 4× says anything about 10^16. A crossing beyond this multiple is
+     * refused rather than printed.
+     */
+    public static final double MAX_EXTRAPOLATION_FACTOR = 10.0;
+
     /** A drop in buffer-cache hit ratio of at least this much between steps is a cliff. */
     public static final double CACHE_CLIFF_DROP = 0.02;
 
@@ -169,9 +181,34 @@ public record GrowthCurve(
                 || rows > Long.MAX_VALUE / 2.0) {
             return -1;
         }
+        if (rows > largestMeasuredRows() * MAX_EXTRAPOLATION_FACTOR) {
+            return -1;
+        }
         // Rounded, not truncated: this is an estimate derived through a log/exp round trip, and
         // truncation biases every answer downward (30,000 rows came back as 29,999).
         return Math.round(rows);
+    }
+
+    /** The largest row count actually measured — the edge of what the fit is entitled to say. */
+    public long largestMeasuredRows() {
+        long largest = 0;
+        for (Point point : points) {
+            largest = Math.max(largest, point.rows());
+        }
+        return largest;
+    }
+
+    /**
+     * True when the fit is sound but the budget is only reached implausibly far beyond the data.
+     * Distinct from "cannot say": the curve is fine, the question is out of range.
+     */
+    public boolean budgetBeyondExtrapolationRange(long budgetNanos) {
+        if (budgetNanos <= 0 || !extrapolatable() || budgetAlreadyExceeded(budgetNanos)) {
+            return false;
+        }
+        double rows = Math.exp((Math.log(budgetNanos) - logIntercept) / exponent);
+        return Double.isInfinite(rows) || Double.isNaN(rows)
+                || rows > largestMeasuredRows() * MAX_EXTRAPOLATION_FACTOR;
     }
 
     public boolean budgetAlreadyExceeded(long budgetNanos) {

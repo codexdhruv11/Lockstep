@@ -147,6 +147,53 @@ final class GrowthCurveTest {
         assertThat(curve.rowsAtBudget(300 * MS)).isEqualTo(-1);
     }
 
+    @Test
+    void aCrossingFarBeyondTheDataIsRefusedHoweverGoodTheFit() {
+        // The measured case: an indexed lookup, 2.0ms to 2.7ms over 25k to 100k rows. A real fit
+        // (R-squared 0.982) on a nearly flat line, which solved out to 22 quadrillion rows.
+        GrowthCurve curve = GrowthCurve.fit(List.of(
+                new GrowthCurve.Point(25_000, 2_000_000L, 2_600_000L, 24_576, 1.0, 30),
+                new GrowthCurve.Point(50_000, 2_300_000L, 3_000_000L, 24_576, 1.0, 30),
+                new GrowthCurve.Point(100_000, 2_700_000L, 3_100_000L, 24_576, 1.0, 30)));
+
+        assertThat(curve.rSquared()).isGreaterThan(0.9);
+        assertThat(curve.exponent()).isGreaterThan(0.15);
+        assertThat(curve.largestMeasuredRows()).isEqualTo(100_000);
+        assertThat(curve.budgetBeyondExtrapolationRange(500 * MS)).isTrue();
+        assertThat(curve.rowsAtBudget(500 * MS))
+                .withFailMessage("a fit over a 4x span of row counts says nothing about 10^16, "
+                        + "however well it describes the points it has")
+                .isEqualTo(-1);
+    }
+
+    @Test
+    void aCrossingJustBeyondTheDataIsStillReported() {
+        // Linear, 10ms at 1,000 rows: a 300ms budget lands at 30,000, which is 7.5x the largest
+        // measurement of 4,000 — inside the allowed range.
+        GrowthCurve curve = GrowthCurve.fit(List.of(
+                point(1_000, 10), point(2_000, 20), point(4_000, 40)));
+
+        assertThat(curve.budgetBeyondExtrapolationRange(300 * MS)).isFalse();
+        assertThat(curve.rowsAtBudget(300 * MS)).isBetween(29_500L, 30_500L);
+    }
+
+    @Test
+    void anOutOfRangeBudgetIsRenderedAsOutOfRangeNotAsANumber() {
+        GrowthCurve curve = GrowthCurve.fit(List.of(
+                new GrowthCurve.Point(25_000, 2_000_000L, 2_600_000L, 24_576, 1.0, 30),
+                new GrowthCurve.Point(50_000, 2_300_000L, 3_000_000L, 24_576, 1.0, 30),
+                new GrowthCurve.Point(100_000, 2_700_000L, 3_100_000L, 24_576, 1.0, 30)));
+
+        String out = CliTables.growthCurveVerdict(curve, 500 * MS, null, "signals");
+
+        assertThat(out).contains("not reached within 10×");
+        assertThat(out).contains("100,000 rows");
+        assertThat(out)
+                .withFailMessage("printing an absurd row count destroys trust in every other "
+                        + "number in the report")
+                .doesNotContain("reaches it at about");
+    }
+
     // --- the cache cliff -----------------------------------------------------------------------
 
     @Test
