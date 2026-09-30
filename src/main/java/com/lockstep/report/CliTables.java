@@ -518,6 +518,111 @@ public final class CliTables {
                 .formatted(Numbers.percent(HistogramRecorder.PERCENTILE_PRECISION)));
     }
 
+    public static String writeAmplificationTable(
+            com.lockstep.analysis.WriteAmplification amplification) {
+        if (amplification == null) {
+            return "";
+        }
+        if (!amplification.available()) {
+            return "write amplification\n" + Ansi.dim("  unavailable — "
+                    + amplification.unavailableReason() + "\n");
+        }
+        if (!amplification.hasWrites()) {
+            // A read-only run has nothing to amplify. Printing a section of zeroes would suggest
+            // the writes were free rather than absent.
+            return "";
+        }
+
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"RELATION", "INSERTS", "UPDATES", "DELETES", "HOT_UPD",
+            "INDEXES", "BYTES/ROW"});
+        for (var relation : amplification.byWritesDescending()) {
+            String indexes = relation.indexCount()
+                    + (relation.partialIndexCount() > 0
+                            ? " (" + relation.partialIndexCount() + " partial)" : "");
+            rows.add(new String[] {
+                relation.name(),
+                Numbers.withSeparators(relation.inserts()),
+                Numbers.withSeparators(relation.updates()),
+                Numbers.withSeparators(relation.deletes()),
+                relation.hotUpdateFraction() < 0
+                        ? "-" : Numbers.percent(relation.hotUpdateFraction()),
+                indexes,
+                relation.effectiveBytesPerRow() <= 0
+                        ? "?" : Numbers.bytes(relation.effectiveBytesPerRow()),
+            });
+        }
+
+        StringBuilder out = new StringBuilder("write amplification\n").append(render(rows));
+        long writes = amplification.totalLogicalWrites();
+        out.append("  %s logical writes wrote %s to the log — %s each, %.1f records, %.2f fsyncs\n"
+                .formatted(Numbers.withSeparators(writes), Numbers.bytes(amplification.walBytes()),
+                        Numbers.bytes(amplification.walBytesPerWrite()),
+                        amplification.walRecordsPerWrite(), amplification.syncsPerWrite()));
+
+        double factor = amplification.amplificationFactor();
+        if (factor > 0) {
+            out.append(Ansi.accent("  the log carries %.1f× the row's own size".formatted(factor)))
+                    .append(" — that multiple is the write path's real cost\n");
+        }
+
+        for (var relation : amplification.byWritesDescending()) {
+            double tax = relation.indexTaxRatio();
+            if (tax > 0) {
+                out.append(("  %s grew %s of table and %s of indexes — %s and %s per row, so the "
+                        + "indexes cost %.1f× the data they point at\n").formatted(
+                                relation.name(),
+                                Numbers.bytes(relation.tableBytesGrown()),
+                                Numbers.bytes(relation.indexBytesGrown()),
+                                Numbers.bytes(relation.onDiskBytesPerInsert()),
+                                Numbers.bytes(relation.indexBytesPerInsert()),
+                                tax));
+            }
+        }
+
+        for (var relation : amplification.byWritesDescending()) {
+            if (relation.heavilyIndexed() && relation.inserts() > 0) {
+                out.append(("  %s carries %d indexes, so each of its %s inserts writes up to %s "
+                        + "index entries%s\n").formatted(
+                                relation.name(), relation.indexCount(),
+                                Numbers.withSeparators(relation.inserts()),
+                                Numbers.withSeparators(
+                                        relation.inserts() * (long) relation.indexCount()),
+                                relation.partialIndexCount() > 0
+                                        ? " (fewer where a partial index's predicate does not match)"
+                                        : ""));
+            }
+            if (relation.updates() > 0 && relation.hotUpdateFraction() >= 0
+                    && relation.hotUpdateFraction() < 0.5 && relation.heavilyIndexed()) {
+                out.append(Ansi.accent("  only %s of %s updates were HOT"
+                        .formatted(Numbers.percent(relation.hotUpdateFraction()),
+                                relation.name())))
+                        .append(" — the rest rewrote every index entry for the row\n");
+            }
+        }
+
+        if (amplification.fullPageImagesDominate()) {
+            out.append(("  %.2f full page images per write: the run straddled a checkpoint, so "
+                    + "these bytes are one-off rather than steady state\n")
+                    .formatted(amplification.fullPageImagesPerWrite()));
+        }
+        if (amplification.walBuffersFull() > 0) {
+            out.append(("  the WAL buffers filled %s times, forcing writes mid-transaction — "
+                    + "wal_buffers is too small for this write rate\n")
+                    .formatted(Numbers.withSeparators(amplification.walBuffersFull())));
+        }
+        if (!amplification.walTimingTracked()) {
+            out.append(Ansi.dim("  fsync timing not measured: track_wal_io_timing is off, so the "
+                    + "count above is real but the time spent is not\n"));
+        } else if (amplification.walSyncTimeMicros() > 0) {
+            out.append("  %s spent in fsync\n".formatted(
+                    Numbers.latency(amplification.walSyncTimeMicros() * 1_000)));
+        }
+        out.append(Ansi.dim("  pg_stat_wal is cluster-wide: every database on this server "
+                + "contributes, so these bytes are an upper bound on what this run wrote\n"));
+        return out.toString();
+    }
+
     public static String growthCurveTable(com.lockstep.analysis.GrowthCurve curve) {
         if (curve == null || curve.points().isEmpty()) {
             return "";

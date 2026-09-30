@@ -1,6 +1,7 @@
 package com.lockstep.runner.db;
 
 import com.lockstep.analysis.ResourceAccounting;
+import com.lockstep.analysis.WriteAmplification;
 import java.lang.management.ManagementFactory;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -50,6 +51,32 @@ final class ResourceProbe {
      * <p>reltuples is -1 on a relation that has never been analysed, so n_live_tup is the
      * fallback for that case only.
      */
+    private static final String WAL_STATS = """
+            SELECT wal_records, wal_fpi, wal_bytes, wal_buffers_full, wal_sync, wal_sync_time
+            FROM pg_stat_wal
+            """;
+
+    private static final String TUPLE_COUNTERS = """
+            SELECT s.relid, s.relname, s.n_tup_ins, s.n_tup_upd, s.n_tup_del, s.n_tup_hot_upd
+            FROM pg_stat_user_tables s
+            """;
+
+    /**
+     * Index load per table. Partial indexes are counted separately because one only takes an
+     * entry when the inserted row matches its predicate, so the total is an upper bound on
+     * entries per insert rather than a measurement.
+     */
+    private static final String INDEX_COUNTS = """
+            SELECT c.relname,
+                   count(*) AS index_count,
+                   count(*) FILTER (WHERE i.indpred IS NOT NULL) AS partial_count
+            FROM pg_index i
+            JOIN pg_class c ON c.oid = i.indrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+            GROUP BY c.relname
+            """;
+
     private static final String SIZES = """
             SELECT s.relid, s.relname,
                    CASE WHEN c.reltuples >= 0 THEN c.reltuples::bigint
@@ -75,6 +102,10 @@ final class ResourceProbe {
     private final int poolSize;
 
     private Map<Long, Counters> before;
+    private long[] walBefore;
+    private Map<Long, ResourceAccounting.Relation> sizesByRelid = new LinkedHashMap<>();
+    private Map<Long, long[]> tuplesBefore;
+    private Map<Long, ResourceAccounting.Relation> sizesBefore;
     private String unavailableReason;
     private long generatorAllocatedAtStart = -1;
 
@@ -99,6 +130,11 @@ final class ResourceProbe {
         }
         try {
             before = readCounters();
+            walBefore = readWalStats();
+            tuplesBefore = readTupleCounters();
+            // Needed to measure how much the tables grew: a write workload cannot get its row
+            // size from reltuples, which is whatever the last ANALYZE saw.
+            sizesBefore = readSizes();
         } catch (Exception e) {
             unavailableReason = "could not read pg_statio_user_tables before the run: " + describe(e);
         }
@@ -122,6 +158,7 @@ final class ResourceProbe {
             long sharedBuffers = settings[0];
             long blockSize = settings[1];
             Map<Long, ResourceAccounting.Relation> sized = readSizes();
+            this.sizesByRelid = sized;
 
             List<ResourceAccounting.Relation> touched = new ArrayList<>();
             for (Map.Entry<Long, Counters> entry : after.entrySet()) {
@@ -248,6 +285,121 @@ final class ResourceProbe {
             total += value.hit() + value.read();
         }
         return total;
+    }
+
+    /** {wal_records, wal_fpi, wal_bytes, wal_buffers_full, wal_sync, wal_sync_time}. */
+    private long[] readWalStats() throws Exception {
+        try (Connection connection = dataSource.getConnection();
+                Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(WAL_STATS)) {
+            if (!rows.next()) {
+                return new long[6];
+            }
+            return new long[] {
+                rows.getLong("wal_records"), rows.getLong("wal_fpi"), rows.getLong("wal_bytes"),
+                rows.getLong("wal_buffers_full"), rows.getLong("wal_sync"),
+                (long) rows.getDouble("wal_sync_time"),
+            };
+        }
+    }
+
+    /** relid -> {n_tup_ins, n_tup_upd, n_tup_del, n_tup_hot_upd}. */
+    private Map<Long, long[]> readTupleCounters() throws Exception {
+        Map<Long, long[]> counters = new LinkedHashMap<>();
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(TUPLE_COUNTERS);
+                ResultSet rows = statement.executeQuery()) {
+            while (rows.next()) {
+                counters.put(rows.getLong("relid"), new long[] {
+                    rows.getLong("n_tup_ins"), rows.getLong("n_tup_upd"),
+                    rows.getLong("n_tup_del"), rows.getLong("n_tup_hot_upd"),
+                });
+            }
+        }
+        return counters;
+    }
+
+    /** table name -> {index_count, partial_count}. */
+    private Map<String, int[]> readIndexCounts() throws Exception {
+        Map<String, int[]> counts = new LinkedHashMap<>();
+        try (Connection connection = dataSource.getConnection();
+                Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(INDEX_COUNTS)) {
+            while (rows.next()) {
+                counts.put(rows.getString("relname"), new int[] {
+                    rows.getInt("index_count"), rows.getInt("partial_count"),
+                });
+            }
+        }
+        return counts;
+    }
+
+    private boolean walTimingTracked() {
+        try (Connection connection = dataSource.getConnection();
+                Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(
+                        "SELECT setting FROM pg_settings WHERE name = 'track_wal_io_timing'")) {
+            return rows.next() && "on".equalsIgnoreCase(rows.getString(1));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * What the run's writes cost. Called after {@link #after}, so the forced flush and settle
+     * have already happened — the WAL counters are reported through the same statistics system
+     * and need the same wait.
+     */
+    WriteAmplification writeAmplification() {
+        if (unavailableReason != null) {
+            return WriteAmplification.unavailable(unavailableReason);
+        }
+        if (walBefore == null || tuplesBefore == null) {
+            return WriteAmplification.unavailable("the run did not record a starting snapshot");
+        }
+        try {
+            long[] walAfter = readWalStats();
+            Map<Long, long[]> tuplesAfter = readTupleCounters();
+            Map<String, int[]> indexes = readIndexCounts();
+
+            List<WriteAmplification.Relation> relations = new ArrayList<>();
+            for (Map.Entry<Long, long[]> entry : tuplesAfter.entrySet()) {
+                long[] start = tuplesBefore.get(entry.getKey());
+                long[] end = entry.getValue();
+                long inserts = end[0] - (start == null ? 0 : start[0]);
+                long updates = end[1] - (start == null ? 0 : start[1]);
+                long deletes = end[2] - (start == null ? 0 : start[2]);
+                long hot = end[3] - (start == null ? 0 : start[3]);
+                if (inserts + updates + deletes <= 0) {
+                    continue;
+                }
+                ResourceAccounting.Relation size = sizesByRelid.get(entry.getKey());
+                String name = size == null ? "?" : size.name();
+                int[] indexCount = indexes.getOrDefault(name, new int[] {0, 0});
+                ResourceAccounting.Relation sizeBefore = sizesBefore == null
+                        ? null : sizesBefore.get(entry.getKey());
+                long tableGrown = size == null || sizeBefore == null
+                        ? 0 : Math.max(0, size.tableBytes() - sizeBefore.tableBytes());
+                long indexGrown = size == null || sizeBefore == null
+                        ? 0 : Math.max(0, size.indexBytes() - sizeBefore.indexBytes());
+                relations.add(new WriteAmplification.Relation(name, inserts, updates, deletes, hot,
+                        indexCount[0], indexCount[1], size == null ? 0 : size.bytesPerRow(),
+                        tableGrown, indexGrown));
+            }
+
+            return new WriteAmplification(true, null,
+                    Math.max(0, walAfter[2] - walBefore[2]),
+                    Math.max(0, walAfter[0] - walBefore[0]),
+                    Math.max(0, walAfter[1] - walBefore[1]),
+                    Math.max(0, walAfter[3] - walBefore[3]),
+                    Math.max(0, walAfter[4] - walBefore[4]),
+                    Math.max(0, walAfter[5] - walBefore[5]),
+                    walTimingTracked(),
+                    relations);
+        } catch (Exception e) {
+            return WriteAmplification.unavailable(
+                    "could not read pg_stat_wal after the run: " + describe(e));
+        }
     }
 
     private Map<Long, Counters> readCounters() throws Exception {

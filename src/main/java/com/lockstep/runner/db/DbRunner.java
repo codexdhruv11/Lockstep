@@ -44,6 +44,7 @@ public final class DbRunner implements Runner {
 
     private final ResourceProbe resourceProbe;
     private volatile com.lockstep.analysis.ResourceAccounting resourceAccounting;
+    private volatile com.lockstep.analysis.WriteAmplification writeAmplification;
 
     private DbRunner(HikariDataSource dataSource, QueryPicker picker, int rate, String normalizedDriver) {
         this.dataSource = dataSource;
@@ -101,12 +102,18 @@ public final class DbRunner implements Runner {
         PacedLoop.LoopResult result = PacedLoop.run(context, rate, this::executeOne, progress);
         this.resourceAccounting =
                 resourceProbe.after(result.executedCount(), context.durationNanos());
+        this.writeAmplification = resourceProbe.writeAmplification();
         return result;
     }
 
     /** What the run cost in bytes. Null until a run has finished. */
     public com.lockstep.analysis.ResourceAccounting resourceAccounting() {
         return resourceAccounting;
+    }
+
+    /** What the run's writes cost. Null until a run has finished. */
+    public com.lockstep.analysis.WriteAmplification writeAmplification() {
+        return writeAmplification;
     }
 
     @Override

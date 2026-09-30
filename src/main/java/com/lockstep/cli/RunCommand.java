@@ -223,6 +223,12 @@ public final class RunCommand implements Callable<Integer> {
                 out.println();
                 out.print(resources);
             }
+            String writes = CliTables.writeAmplificationTable(
+                    result.dbRunner().writeAmplification());
+            if (!writes.isEmpty()) {
+                out.println();
+                out.print(writes);
+            }
         }
         if (result.redisRunner() != null) {
             String commands = CliTables.queryTable("redis commands",
