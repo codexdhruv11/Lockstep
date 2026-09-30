@@ -113,6 +113,20 @@ public record Bottleneck(
         return total <= 0 ? 0 : (double) waitsByType.getOrDefault(type, 0) / total;
     }
 
+    /**
+     * What bounded the run.
+     *
+     * <p>A dominant wait outranks a full connection pool, and getting that order wrong was a real
+     * defect. Holding a row lock and driving updates at the locked row produced 100% {@code Lock}
+     * waits with all four pooled backends busy for 99% of samples, and the earlier ordering — pool
+     * plateau checked first — called that a connection bottleneck. It is not: the backends were
+     * occupied *because* they were blocked on the lock, so the full pool was the symptom and the
+     * lock the cause. Raising the pool would have added more blocked backends.
+     *
+     * <p>The same reasoning applies to IO. Only when the backends were genuinely running rather
+     * than waiting does a held plateau mean the pool itself is the limit, because then more
+     * connections would admit more work.
+     */
     public Verdict verdict() {
         if (!available || samples < 3) {
             return Verdict.UNKNOWN;
@@ -120,22 +134,19 @@ public record Bottleneck(
         if (waitsByType.isEmpty() && meanActiveBackends < 1) {
             return Verdict.NOT_SATURATED;
         }
-        if (connectionCeilingReached()) {
-            return Verdict.CONNECTIONS;
-        }
         String dominant = dominantWaitType();
         if (dominant == null) {
             return Verdict.NOT_SATURATED;
         }
-        double share = shareOfWaits(dominant);
-        if (share < DOMINANT_WAIT_SHARE) {
-            return Verdict.NOT_SATURATED;
+        if (shareOfWaits(dominant) < DOMINANT_WAIT_SHARE) {
+            // No single cause. A plateau is still worth naming if one was held.
+            return connectionCeilingReached() ? Verdict.CONNECTIONS : Verdict.NOT_SATURATED;
         }
         return switch (dominant) {
             case "IO" -> Verdict.STORAGE_IO;
             case "Lock" -> Verdict.LOCK_CONTENTION;
-            case RUNNING -> Verdict.CPU;
-            default -> Verdict.NOT_SATURATED;
+            case RUNNING -> connectionCeilingReached() ? Verdict.CONNECTIONS : Verdict.CPU;
+            default -> connectionCeilingReached() ? Verdict.CONNECTIONS : Verdict.NOT_SATURATED;
         };
     }
 

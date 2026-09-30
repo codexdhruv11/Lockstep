@@ -27,14 +27,43 @@ final class BottleneckTest {
 
     @Test
     void aHeldPlateauBelowTheServerLimitIsTheClientsPool() {
+        // Backends running rather than waiting, pinned at 20 while the server allows 100: more
+        // connections would admit more work, so the pool is genuinely the limit.
         var bottleneck = bottleneck(100, 19.6, 20, 20, 90, 100,
-                waits("IO", 200, Bottleneck.RUNNING, 100));
+                waits(Bottleneck.RUNNING, 280, "IO", 20));
 
         assertThat(bottleneck.connectionCeilingReached()).isTrue();
         assertThat(bottleneck.verdict())
-                .withFailMessage("backends pinned at 20 while the server allows 100 is a client "
-                        + "pool limit, and it outranks whatever those backends were waiting on")
+                .withFailMessage("backends working flat out and pinned at 20 while the server "
+                        + "allows 100 means more connections would admit more work")
                 .isEqualTo(Bottleneck.Verdict.CONNECTIONS);
+    }
+
+    @Test
+    void aDominantWaitOutranksAFullPool() {
+        // The measured case: a row lock held for a whole run. All four pooled backends busy for
+        // 99% of samples, every one of them waiting on the lock.
+        var bottleneck = bottleneck(139, 3.97, 4, 4, 138, 100, waits("Lock", 552));
+
+        assertThat(bottleneck.connectionCeilingReached())
+                .withFailMessage("the pool really was full; that part was never in doubt")
+                .isTrue();
+        assertThat(bottleneck.verdict())
+                .withFailMessage("the backends were busy because they were blocked on a lock, so "
+                        + "the full pool is the symptom and the lock the cause. Calling it a "
+                        + "connection bottleneck sends the reader to raise the pool, which would "
+                        + "only add more blocked backends.")
+                .isEqualTo(Bottleneck.Verdict.LOCK_CONTENTION);
+    }
+
+    @Test
+    void dominantStorageWaitsAlsoOutrankAFullPool() {
+        var bottleneck = bottleneck(100, 3.9, 4, 4, 98, 100, waits("IO", 400));
+
+        assertThat(bottleneck.connectionCeilingReached()).isTrue();
+        assertThat(bottleneck.verdict())
+                .withFailMessage("raising the pool cannot make the disk faster")
+                .isEqualTo(Bottleneck.Verdict.STORAGE_IO);
     }
 
     @Test
@@ -146,7 +175,7 @@ final class BottleneckTest {
     @Test
     void aConnectionCeilingIsNamedAsThePoolSize() {
         String out = CliTables.bottleneckTable(bottleneck(100, 19.6, 20, 20, 90, 100,
-                waits("IO", 200)));
+                waits(Bottleneck.RUNNING, 280)));
 
         assertThat(out).contains("bounded by connections");
         assertThat(out).contains("sat at 20");
