@@ -518,6 +518,85 @@ public final class CliTables {
                 .formatted(Numbers.percent(HistogramRecorder.PERCENTILE_PRECISION)));
     }
 
+    public static String resourceTable(com.lockstep.analysis.ResourceAccounting accounting) {
+        if (accounting == null) {
+            return "";
+        }
+        if (!accounting.available()) {
+            return "resource accounting\n" + Ansi.dim("  unavailable — "
+                    + accounting.unavailableReason() + "\n");
+        }
+        if (!accounting.hasRelations()) {
+            return "resource accounting\n" + Ansi.dim(
+                    "  no relation's block counters moved during the run — nothing was read "
+                    + "through a table the statistics views track\n");
+        }
+
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"RELATION", "ROWS", "TABLE", "INDEXES", "BYTES/ROW",
+            "BLOCKS/REQ", "BYTES/REQ", "HIT%"});
+        for (var relation : accounting.byBytesTouchedDescending()) {
+            double hit = relation.hitRatio();
+            rows.add(new String[] {
+                relation.name(),
+                relation.liveRows() <= 0 ? "?" : Numbers.withSeparators(relation.liveRows()),
+                Numbers.bytes(relation.tableBytes()),
+                Numbers.bytes(relation.indexBytes()),
+                relation.bytesPerRow() <= 0 ? "?" : Numbers.bytes(relation.bytesPerRow()),
+                Numbers.withSeparators(accounting.blocksPerRequest(relation)),
+                Numbers.bytes(accounting.bytesPerRequest(relation)),
+                hit < 0 ? "-" : Numbers.percent(hit),
+            });
+        }
+
+        StringBuilder out = new StringBuilder("resource accounting\n").append(render(rows));
+        for (var relation : accounting.byBytesTouchedDescending()) {
+            if (accounting.readsWholeTablePerRequest(relation)) {
+                out.append(Ansi.accent("! " + relation.name()))
+                        .append(" reads ")
+                        .append(Numbers.bytes(accounting.bytesPerRequest(relation)))
+                        .append(" per request against a ")
+                        .append(Numbers.bytes(relation.tableBytes()))
+                        .append(" table — every request walks the whole thing\n")
+                        .append("    at ")
+                        .append(Numbers.rate(accounting.achievedRatePerSecond()))
+                        .append(" that is ")
+                        .append(Numbers.bytes((long) accounting.bufferBytesPerSecond(relation)))
+                        .append("/s of buffer traffic\n");
+            }
+        }
+
+        if (accounting.sharedBuffersBytes() > 0) {
+            var widest = accounting.byBytesTouchedDescending().get(0);
+            if (accounting.exceedsSharedBuffers(widest)) {
+                out.append("  shared_buffers ").append(Numbers.bytes(accounting.sharedBuffersBytes()))
+                        .append(" — ").append(widest.name()).append(" (")
+                        .append(Numbers.bytes(widest.tableBytes()))
+                        .append(") already exceeds it\n");
+            } else {
+                long limit = accounting.rowsAtSharedBuffersLimit(widest);
+                out.append("  shared_buffers ").append(Numbers.bytes(accounting.sharedBuffersBytes()));
+                if (limit > 0) {
+                    out.append(" — ").append(widest.name()).append(" outgrows it at about ")
+                            .append(Numbers.withSeparators(limit)).append(" rows");
+                }
+                out.append('\n');
+            }
+        }
+
+        if (accounting.generatorBytesPerRequest() > 0) {
+            out.append(Ansi.dim("  this generator allocated "
+                    + Numbers.bytes(accounting.generatorBytesPerRequest())
+                    + " per request ("
+                    + Numbers.bytes((long) accounting.generatorAllocationBytesPerSecond())
+                    + "/s) — its own cost, not the target's\n"));
+        }
+        out.append(Ansi.dim(
+                "  block counters are per-database: anything else querying it during the run is "
+                + "counted here too. Row counts are the planner's estimate.\n"));
+        return out.toString();
+    }
+
     private static String statusBreakdown(RunnerSummary summary) {
         Map<Integer, Long> statuses = summary.statusCounts();
         if (statuses.isEmpty()) {

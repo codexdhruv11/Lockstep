@@ -218,6 +218,11 @@ public final class RunCommand implements Callable<Integer> {
                 out.println();
                 out.print(plans);
             }
+            String resources = CliTables.resourceTable(result.dbRunner().resourceAccounting());
+            if (!resources.isEmpty()) {
+                out.println();
+                out.print(resources);
+            }
         }
         if (result.redisRunner() != null) {
             String commands = CliTables.queryTable("redis commands",

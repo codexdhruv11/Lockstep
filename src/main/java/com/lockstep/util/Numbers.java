@@ -44,6 +44,32 @@ public final class Numbers {
         return String.format(Locale.ROOT, "%.1f%%", fraction * 100);
     }
 
+    /**
+     * Binary units, because every tool that reports database and memory sizes uses them: a
+     * Postgres 8kB block is 8192 bytes, and shared_buffers of "128MB" is 134217728.
+     */
+    public static String bytes(long value) {
+        if (value < 0) {
+            return "-" + bytes(-value);
+        }
+        if (value < 1024) {
+            return value + "B";
+        }
+        double kb = value / 1024.0;
+        if (kb < 1024) {
+            return trim(kb) + "KB";
+        }
+        double mb = kb / 1024.0;
+        if (mb < 1024) {
+            return trim(mb) + "MB";
+        }
+        double gb = mb / 1024.0;
+        if (gb < 1024) {
+            return trim(gb) + "GB";
+        }
+        return trim(gb / 1024.0) + "TB";
+    }
+
     public static String clock(long nanos) {
         long totalSeconds = Math.max(0, nanos / 1_000_000_000L);
         return String.format(Locale.ROOT, "%02d:%02d", totalSeconds / 60, totalSeconds % 60);

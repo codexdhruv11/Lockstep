@@ -42,12 +42,16 @@ public final class DbRunner implements Runner {
     private final Map<String, QueryPlan> plans = new LinkedHashMap<>();
     private int plansSkipped;
 
+    private final ResourceProbe resourceProbe;
+    private volatile com.lockstep.analysis.ResourceAccounting resourceAccounting;
+
     private DbRunner(HikariDataSource dataSource, QueryPicker picker, int rate, String normalizedDriver) {
         this.dataSource = dataSource;
         this.picker = picker;
         this.rate = rate;
         this.normalizedDriver = normalizedDriver;
         this.queryLabels = QueryLabels.forQueries(picker.queries());
+        this.resourceProbe = new ResourceProbe(dataSource, normalizedDriver, dataSource.getMaximumPoolSize());
     }
 
     public record QueryPlan(String label, String statement, boolean executed, String plan,
@@ -92,7 +96,17 @@ public final class DbRunner implements Runner {
             recorders[i] = new HistogramRecorder(context.bucketWidthNanos(), buckets);
         }
         this.queryRecorders = recorders;
-        return PacedLoop.run(context, rate, this::executeOne, progress);
+
+        resourceProbe.before();
+        PacedLoop.LoopResult result = PacedLoop.run(context, rate, this::executeOne, progress);
+        this.resourceAccounting =
+                resourceProbe.after(result.executedCount(), context.durationNanos());
+        return result;
+    }
+
+    /** What the run cost in bytes. Null until a run has finished. */
+    public com.lockstep.analysis.ResourceAccounting resourceAccounting() {
+        return resourceAccounting;
     }
 
     @Override
