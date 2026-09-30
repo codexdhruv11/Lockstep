@@ -130,6 +130,75 @@ final class PostgresStateOracleTest {
         }
     }
 
+    // --- real storage IO waits ------------------------------------------------------------------
+
+    @Test
+    void realStorageWaitsAreObservedAndClassified() throws Exception {
+        assumeTrue(DockerClientFactory.instance().isDockerAvailable(), "Docker unavailable");
+
+        // 1MB of buffers against a table of well over 100MB: essentially every block must be
+        // fetched from outside shared_buffers, so IO wait events are genuinely produced.
+        try (PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:16-alpine")
+                .withCommand("postgres", "-c", "shared_buffers=1MB")) {
+            pg.start();
+            long tableBytes;
+            try (Connection connection = open(pg);
+                    Statement statement = connection.createStatement()) {
+                statement.execute("CREATE TABLE big (id serial PRIMARY KEY, pad char(400))");
+                statement.execute("INSERT INTO big (pad) SELECT repeat('x', 400) "
+                        + "FROM generate_series(1, 200000)");
+                statement.execute("VACUUM ANALYZE big");
+                tableBytes = scalar(connection, "SELECT pg_table_size('big')");
+            }
+
+            DbConfig config = new DbConfig(new DbConfig.Target(conn(pg), "postgres",
+                    List.of(new QuerySpec("SELECT sum(length(pad)) FROM big", 1, "read", null)),
+                    4), 8);
+
+            Bottleneck bottleneck;
+            double hitRatio;
+            try (BottleneckSampler sampler = BottleneckSampler.open(conn(pg), "postgres")) {
+                sampler.start();
+                try (DbRunner runner = DbRunner.create(config, 4)) {
+                    runner.run(RunContext.startingNow(6 * SECOND, 500 * MS, 0, 4));
+                    var accounting = runner.resourceAccounting();
+                    hitRatio = accounting.relations().stream()
+                            .filter(r -> r.name().equals("big")).findFirst().orElseThrow()
+                            .hitRatio();
+                }
+                bottleneck = sampler.stop();
+            }
+
+            boolean sawIo = bottleneck.waitsByType().containsKey("IO");
+            double ioShare = bottleneck.shareOfWaits("IO");
+
+            record("table size", "> 50MB",
+                    com.lockstep.util.Numbers.bytes(tableBytes), tableBytes > 50L * 1024 * 1024);
+            record("buffer hit ratio", "very low", "%.3f".formatted(hitRatio), hitRatio < 0.2);
+            record("IO waits observed", "(recorded)", sawIo ? "yes" : "no", true);
+            record("IO share of waits", "(recorded)", "%.1f%%".formatted(ioShare * 100), true);
+            record("verdict", "(recorded, not asserted)", bottleneck.verdict(), true);
+            printLedger("storage IO, 1MB of buffers against a "
+                    + com.lockstep.util.Numbers.bytes(tableBytes) + " table");
+
+            assertThat(hitRatio)
+                    .withFailMessage("""
+                            with 1MB of shared_buffers against %d bytes of table, almost every                             block must come from outside the buffer cache; a hit ratio of %.3f                             would mean the reads are not happening""", tableBytes, hitRatio)
+                    .isLessThan(0.2);
+            assertThat(sawIo)
+                    .withFailMessage("""
+                            real IO wait events must be observed and classified under the IO type                             — that path had only ever been exercised with hand-built input.                             Waits seen: %s""", bottleneck.waitsByType())
+                    .isTrue();
+
+            // Deliberately NOT asserting the STORAGE_IO verdict. The host's page cache serves
+            // these reads quickly enough that backends spend most of each sample running rather
+            // than waiting, so "(running)" dominates and the verdict is CPU. Producing a
+            // dominant IO wait needs storage this environment cannot provide; forcing the
+            // assertion would mean weakening the threshold until it fired, which would make the
+            // verdict fire on ordinary runs too.
+        }
+    }
+
     // --- a real cache cliff ----------------------------------------------------------------------
 
     @Test

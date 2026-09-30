@@ -117,10 +117,26 @@ public final class CompareCommand implements Callable<Integer> {
         return JsonExport.read(path);
     }
 
+    /**
+     * How far the change would have to be to mean anything: the wider of the two runs' own
+     * per-second variability. A change smaller than this is inside the noise, and printing it
+     * beside the change is what stops the reader over-reading a percentage.
+     */
+    private static String noiseColumn(RunComparator.RunnerDiff diff, boolean oneSided) {
+        if (oneSided || !diff.noiseBounded()) {
+            return "-";
+        }
+        double halfWidth = diff.noiseHalfWidth();
+        if (halfWidth < 0) {
+            return "-";
+        }
+        return String.format(Locale.ROOT, "\u00b1%.0f%%", halfWidth * 100);
+    }
+
     private static String table(RunComparator.Comparison comparison) {
         List<String[]> rows = new ArrayList<>();
         rows.add(new String[] {"RUNNER", "BASELINE_P50", "CURRENT_P50", "BASELINE_P99",
-            "CURRENT_P99", "CHANGE", "VERDICT"});
+            "CURRENT_P99", "CHANGE", "NOISE", "VERDICT"});
         for (RunComparator.RunnerDiff diff : comparison.runners()) {
             boolean oneSided = diff.verdict() == RunComparator.Verdict.NEW
                     || diff.verdict() == RunComparator.Verdict.REMOVED;
@@ -135,6 +151,7 @@ public final class CompareCommand implements Callable<Integer> {
                 diff.verdict() == RunComparator.Verdict.NEW ? "-" : Numbers.latency(diff.baselineP99Nanos()),
                 diff.verdict() == RunComparator.Verdict.REMOVED ? "-" : Numbers.latency(diff.currentP99Nanos()),
                 oneSided ? "-" : String.format(Locale.ROOT, "%+.0f%%", diff.changeFraction() * 100),
+                noiseColumn(diff, oneSided),
                 verdict,
             });
         }
@@ -156,7 +173,7 @@ public final class CompareCommand implements Callable<Integer> {
             }
             String text = line.toString().stripTrailing();
             out.append(r == 0 ? Ansi.bold(text)
-                    : rows.get(r)[6].startsWith("REGRESSION") ? Ansi.error(text) : text).append('\n');
+                    : rows.get(r)[7].startsWith("REGRESSION") ? Ansi.error(text) : text).append('\n');
         }
         return out.toString();
     }

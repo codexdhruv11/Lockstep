@@ -313,7 +313,28 @@ public record GrowthCurve(
      */
     public boolean fixedCostMasksScaling() {
         double work = workExponent();
-        return work > 0 && exponent > 0 && work - exponent >= 0.25 && fixedOverheadNanos() > 0;
+        return work > 0 && exponent > 0.15 && work - exponent >= 0.25
+                && fixedOverheadNanos() > 0;
+    }
+
+    /**
+     * True when the work grew with the data but the measured time did not rise with it at all.
+     *
+     * <p>Time falling as the work increases is not a property of the target; it means something
+     * outside the run changed between steps. Measured while a busy test suite competed for the
+     * machine: bytes per request scaled cleanly from 5.8MB to 23MB across 25k, 50k and 100k rows
+     * while service time went 147ms, 114ms, 98ms, fitting rows^-0.29 at R² 0.977 — a confident
+     * fit to contamination.
+     *
+     * <p>Reported separately from {@link #fixedCostMasksScaling()} because the remedy differs:
+     * fixed cost is a real property to be quantified, whereas this means the measurements should
+     * be taken again on a quiet machine. Without it the report would say "flat: the row count
+     * barely matters" beside "the work is proportional to the data", which is a contradiction
+     * left for the reader to notice.
+     */
+    public boolean workGrewButTimeDidNot() {
+        double work = workExponent();
+        return work >= 0.75 && exponent <= 0.15;
     }
 
     /**

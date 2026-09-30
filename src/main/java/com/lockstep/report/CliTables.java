@@ -787,6 +787,14 @@ public final class CliTables {
                     + "plan against\n");
         }
 
+        if (curve.workGrewButTimeDidNot()) {
+            out.append(Ansi.accent("! these measurements cannot support a growth curve"))
+                    .append((" — bytes read per request grew as rows^%.2f while service time "
+                            + "fitted rows^%.2f. Time cannot fall as the work rises, so something "
+                            + "outside the run changed between steps. Re-measure on an otherwise "
+                            + "idle machine.\n")
+                            .formatted(curve.workExponent(), curve.exponent()));
+        }
         if (curve.fixedCostMasksScaling()) {
             out.append(("  bytes read per request grew as rows^%.2f while service time grew as "
                     + "rows^%.2f — the gap is about %s of fixed cost per request that does not "

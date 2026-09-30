@@ -194,6 +194,50 @@ final class GrowthCurveTest {
                 .doesNotContain("reaches it at about");
     }
 
+    @Test
+    void timeFallingWhileTheWorkRisesIsReportedAsContamination() {
+        // The measured case: bytes per request scaled 4x across the steps while service time
+        // fell, fitting rows^-0.29 at R-squared 0.977. A confident fit to interference.
+        GrowthCurve curve = GrowthCurve.fit(List.of(
+                new GrowthCurve.Point(25_000, 147 * MS, 148 * MS, 5_800_000, 1.0, 30),
+                new GrowthCurve.Point(50_000, 114 * MS, 117 * MS, 11_500_000, 1.0, 30),
+                new GrowthCurve.Point(100_000, 98 * MS, 98 * MS, 23_000_000, 1.0, 30)));
+
+        assertThat(curve.workExponent()).isCloseTo(1.0, org.assertj.core.data.Offset.offset(0.05));
+        assertThat(curve.exponent()).isNegative();
+        assertThat(curve.workGrewButTimeDidNot())
+                .withFailMessage("work rose and time fell; that is not a property of the target")
+                .isTrue();
+        assertThat(curve.fixedCostMasksScaling())
+                .withFailMessage("this is contamination, not a fixed cost to quantify — the two "
+                        + "have different remedies and must not be conflated")
+                .isFalse();
+
+        String out = CliTables.growthCurveVerdict(curve, 2_000 * MS, null, "signals");
+        assertThat(out).contains("cannot support a growth curve");
+        assertThat(out).contains("Re-measure on an otherwise idle machine");
+        assertThat(out)
+                .withFailMessage("a budget crossing from contaminated data would be invention")
+                .doesNotContain("reaches it at about");
+    }
+
+    @Test
+    void aGenuineFixedCostIsNotReportedAsContamination() {
+        // Time rises, just more slowly than the work: that is fixed overhead, which is a real
+        // property worth quantifying rather than a reason to re-run.
+        GrowthCurve curve = GrowthCurve.fit(List.of(
+                new GrowthCurve.Point(20_000, 10 * MS, 10 * MS, 2_800_000, 1.0, 20),
+                new GrowthCurve.Point(40_000, 14 * MS, 14 * MS, 5_600_000, 1.0, 20),
+                new GrowthCurve.Point(80_000, 25 * MS, 25 * MS, 11_200_000, 1.0, 20)));
+
+        assertThat(curve.exponent()).isPositive();
+        assertThat(curve.workGrewButTimeDidNot()).isFalse();
+        assertThat(curve.fixedCostMasksScaling())
+                .withFailMessage("work %.2f against time %.2f is the fixed-cost case",
+                        curve.workExponent(), curve.exponent())
+                .isTrue();
+    }
+
     // --- the cache cliff -----------------------------------------------------------------------
 
     @Test

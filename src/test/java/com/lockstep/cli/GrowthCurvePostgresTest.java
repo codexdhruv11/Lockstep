@@ -198,12 +198,20 @@ final class GrowthCurvePostgresTest {
                             + "is what separates a scan from an index lookup:%n%s", run.out())
                     .contains("the work is proportional to the data");
 
-            String exponent = run.out().replaceAll("(?s).*service time grows as rows\\^([0-9.-]+).*", "$1");
-            double fitted = Double.parseDouble(exponent);
-            assertThat(fitted)
-                    .withFailMessage("a whole-table aggregate must show latency rising with row "
-                            + "count; fitted exponent was %.2f%n%s", fitted, run.out())
-                    .isGreaterThan(0.4);
+            // Asserting the WORK, not the time. Bytes per request is derived from block
+            // counters and does not depend on timing, so a scan must show it growing with the
+            // table however loaded the machine is. The time exponent does depend on load: under
+            // a busy test suite this same fixture produced rows^-0.29 at R-squared 0.977, a
+            // confident fit to contamination, while bytes per request still scaled exactly 4x.
+            assertThat(run.out())
+                    .withFailMessage("""
+                            bytes read per request must grow with a table scan, which is what \
+                            separates a scan from an index lookup:%n%s""", run.out())
+                    .contains("the work is proportional to the data");
+            assertThat(run.out())
+                    .withFailMessage("a scan's cost is bound to the table, so the report must not "
+                            + "claim an index is bounding the work:%n%s", run.out())
+                    .doesNotContain("an index is bounding the work");
         }
     }
 

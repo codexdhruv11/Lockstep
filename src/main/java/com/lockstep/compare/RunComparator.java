@@ -7,6 +7,10 @@ import java.util.List;
 import java.util.Set;
 
 public final class RunComparator {
+
+    /** Fixed so that the same two reports always produce the same verdict. */
+    static final long BOOTSTRAP_SEED = 20260930L;
+
     private RunComparator() {}
 
     public enum Verdict {
@@ -37,7 +41,44 @@ public final class RunComparator {
             long baselineSpikes,
             long currentSpikes,
             long baselineCorrelated,
-            long currentCorrelated) {
+            long currentCorrelated,
+            com.lockstep.analysis.Bootstrap.Interval baselineInterval,
+            com.lockstep.analysis.Bootstrap.Interval currentInterval) {
+
+        public RunnerDiff(String name, long baselineP99Nanos, long currentP99Nanos,
+                double changeFraction, long baselineP50Nanos, long currentP50Nanos,
+                Verdict p50Verdict, long baselineCount, long currentCount, Verdict verdict,
+                long baselineSpikes, long currentSpikes, long baselineCorrelated,
+                long currentCorrelated) {
+            this(name, baselineP99Nanos, currentP99Nanos, changeFraction, baselineP50Nanos,
+                    currentP50Nanos, p50Verdict, baselineCount, currentCount, verdict,
+                    baselineSpikes, currentSpikes, baselineCorrelated, currentCorrelated,
+                    null, null);
+        }
+
+        /** True when both runs gave enough per-second data to bound their own noise. */
+        public boolean noiseBounded() {
+            return baselineInterval != null && currentInterval != null
+                    && baselineInterval.usable() && currentInterval.usable();
+        }
+
+        /**
+         * True when the two runs' intervals do not overlap. A change that fails this is inside the
+         * runs' own variation and is not evidence of anything.
+         */
+        public boolean distinguishableFromNoise() {
+            return com.lockstep.analysis.Bootstrap.distinguishable(
+                    baselineInterval, currentInterval);
+        }
+
+        /** The wider of the two runs' relative half-widths — how noisy this comparison is. */
+        public double noiseHalfWidth() {
+            if (!noiseBounded()) {
+                return -1;
+            }
+            return Math.max(baselineInterval.relativeHalfWidth(),
+                    currentInterval.relativeHalfWidth());
+        }
         public boolean findingsWorsened() {
             return currentCorrelated > baselineCorrelated;
         }
@@ -143,14 +184,34 @@ public final class RunComparator {
 
             long p50Delta = after.p50Nanos() - before.p50Nanos();
             double p50Change = before.p50Nanos() == 0 ? 0 : (double) p50Delta / before.p50Nanos();
+
+            // Bound each run's own second-to-second variation, so a difference inside it is not
+            // reported as a change. An absolute budget alone cannot tell a regression from an
+            // unlucky pair of runs.
+            var bootstrap = com.lockstep.analysis.Bootstrap.defaults();
+            var beforeInterval = bootstrap.interval(bucketP99s(before), BOOTSTRAP_SEED);
+            var afterInterval = bootstrap.interval(bucketP99s(after), BOOTSTRAP_SEED);
+            boolean noisy = beforeInterval.usable() && afterInterval.usable()
+                    && beforeInterval.overlaps(afterInterval);
+
             diffs.add(new RunnerDiff(name, before.p99Nanos(), after.p99Nanos(), change,
                     before.p50Nanos(), after.p50Nanos(),
-                    verdictFor(p50Delta, p50Change, budgetNanos, current.percentilePrecision()),
+                    verdictFor(p50Delta, p50Change, budgetNanos, current.percentilePrecision(),
+                            noisy),
                     before.count(), after.count(),
-                    verdictFor(delta, change, budgetNanos, current.percentilePrecision()),
-                    baselineSpikes, currentSpikes, baselineCorrelated, currentCorrelated));
+                    verdictFor(delta, change, budgetNanos, current.percentilePrecision(), noisy),
+                    baselineSpikes, currentSpikes, baselineCorrelated, currentCorrelated,
+                    beforeInterval, afterInterval));
         }
         for (RunnerDiff diff : diffs) {
+            if (diff.noiseBounded() && !diff.distinguishableFromNoise()
+                    && Math.abs(diff.changeFraction()) > current.percentilePrecision()) {
+                warnings.add(("%s p99 moved %+.0f%%, but the two runs' own per-second variation "
+                        + "spans \u00b1%.0f%% and their intervals overlap — not distinguishable "
+                        + "from noise")
+                        .formatted(diff.name(), diff.changeFraction() * 100,
+                                diff.noiseHalfWidth() * 100));
+            }
             if (diff.throughputDiverged()) {
                 warnings.add(("%s did %s operations vs %s — a run that shed load can post a better "
                         + "p99 while being worse")
@@ -186,9 +247,20 @@ public final class RunComparator {
                 .toList();
     }
 
+    /**
+     * A change is reported only when it clears three bars: it is larger than the histogram's own
+     * precision, larger than the budget, and outside the two runs' overlapping variability.
+     *
+     * <p>The third is the one that was missing. Without it a tail latency that wanders by 20%
+     * between identical runs crosses any smaller budget and is announced as a regression, which
+     * teaches the reader to disregard the verdict.
+     */
     private static Verdict verdictFor(long deltaNanos, double changeFraction, long budgetNanos,
-            double precision) {
+            double precision, boolean withinNoise) {
         if (Math.abs(changeFraction) <= precision) {
+            return Verdict.OK;
+        }
+        if (withinNoise) {
             return Verdict.OK;
         }
         if (deltaNanos > budgetNanos) {
@@ -198,6 +270,19 @@ public final class RunComparator {
             return Verdict.IMPROVED;
         }
         return Verdict.OK;
+    }
+
+    private static java.util.List<Long> bucketP99s(RunReport.RunnerReport runner) {
+        java.util.List<Long> values = new ArrayList<>();
+        if (runner == null || runner.buckets() == null) {
+            return values;
+        }
+        for (RunReport.BucketReport bucket : runner.buckets()) {
+            if (bucket.count() > 0 && bucket.p99Nanos() > 0) {
+                values.add(bucket.p99Nanos());
+            }
+        }
+        return values;
     }
 
     private static void requireComparablePrecision(RunReport baseline, RunReport current) {

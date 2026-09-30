@@ -201,4 +201,23 @@ final class QueryPlanCaptureTest {
 
         assertThat(ExplainDialect.forQuery("sqlite", "SELECT 1", true).executes()).isFalse();
     }
+
+    @Test
+    void theMysqlFormsAreWhatTheCodeIntendsToSend() {
+        // MySQL had no coverage at all, not even this. It remains unverified against a running
+        // MySQL server — see ExplainDialectOracleTest#mysqlDialectIsAKnownGap — so these
+        // assertions pin the intent only, and say nothing about whether the syntax is accepted.
+        var read = ExplainDialect.forQuery("mysql", "SELECT 1", true);
+        assertThat(read.sql()).isEqualTo("EXPLAIN ANALYZE SELECT 1");
+        assertThat(read.executes())
+                .withFailMessage("EXPLAIN ANALYZE runs the query on MySQL as it does on Postgres")
+                .isTrue();
+        assertThat(read.label()).contains("8.0.18");
+
+        var write = ExplainDialect.forQuery("mysql", "INSERT INTO t VALUES (1)", false);
+        assertThat(write.sql()).isEqualTo("EXPLAIN INSERT INTO t VALUES (1)");
+        assertThat(write.executes())
+                .withFailMessage("a write must never be re-run to explain it")
+                .isFalse();
+    }
 }
