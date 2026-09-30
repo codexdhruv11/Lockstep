@@ -236,6 +236,87 @@ public record GrowthCurve(
     }
 
     /**
+     * The exponent of the <em>work</em>: how bytes read per request scaled with the row count,
+     * fitted the same way as the time exponent.
+     *
+     * <p>Comparing the two is what separates a scaling problem from a fixed cost. A sequential
+     * scan reads every block, so its work exponent is 1 by construction — and if the time
+     * exponent comes out below that, the difference is per-query overhead that does not grow with
+     * the table. Measured here: bytes per request doubled exactly across 20k, 40k and 80k rows
+     * (work exponent 1.00) while service time went 9.96ms, 14.35ms, 24.90ms, giving a time
+     * exponent of 0.66 at R² 0.986 — a clean fit of the wrong model, because the truth was
+     * affine: about 5ms of fixed cost plus 5ms of scan at 20,000 rows.
+     *
+     * <p>Returns -1 when bytes per request were not measured.
+     */
+    public double workExponent() {
+        List<Point> usable = points.stream()
+                .filter(point -> point.rows() > 0 && point.bytesPerRequest() > 0)
+                .toList();
+        if (usable.size() < 2) {
+            return -1;
+        }
+        double meanX = usable.stream().mapToDouble(p -> Math.log(p.rows())).average().orElseThrow();
+        double meanY = usable.stream()
+                .mapToDouble(p -> Math.log(p.bytesPerRequest())).average().orElseThrow();
+        double covariance = 0;
+        double varianceX = 0;
+        for (Point point : usable) {
+            double dx = Math.log(point.rows()) - meanX;
+            covariance += dx * (Math.log(point.bytesPerRequest()) - meanY);
+            varianceX += dx * dx;
+        }
+        return varianceX == 0 ? -1 : covariance / varianceX;
+    }
+
+    /**
+     * Fixed cost per request that does not scale with the data, estimated as the intercept of
+     * service time regressed on bytes read. Negative when it cannot be estimated or is not
+     * meaningfully positive.
+     *
+     * <p>This is the part a power law cannot express, and over a range where it is comparable to
+     * the variable cost it drags the exponent well below the truth.
+     */
+    public long fixedOverheadNanos() {
+        List<Point> usable = points.stream()
+                .filter(point -> point.bytesPerRequest() > 0 && point.serviceP99Nanos() > 0)
+                .toList();
+        if (usable.size() < 2) {
+            return -1;
+        }
+        double meanX = usable.stream().mapToDouble(Point::bytesPerRequest).average().orElseThrow();
+        double meanY = usable.stream().mapToDouble(Point::serviceP99Nanos).average().orElseThrow();
+        double covariance = 0;
+        double varianceX = 0;
+        for (Point point : usable) {
+            double dx = point.bytesPerRequest() - meanX;
+            covariance += dx * (point.serviceP99Nanos() - meanY);
+            varianceX += dx * dx;
+        }
+        if (varianceX == 0) {
+            return -1;
+        }
+        double slope = covariance / varianceX;
+        double intercept = meanY - slope * meanX;
+        if (intercept <= 0) {
+            return -1;
+        }
+        // Only worth reporting when it is a real share of the smallest measurement; otherwise it
+        // is regression noise dressed up as a finding.
+        long smallest = usable.stream().mapToLong(Point::serviceP99Nanos).min().orElseThrow();
+        return intercept >= smallest * 0.1 ? (long) intercept : -1;
+    }
+
+    /**
+     * True when the work scaled appreciably faster than the time, which means a fixed per-request
+     * cost is currently masking the data's effect.
+     */
+    public boolean fixedCostMasksScaling() {
+        double work = workExponent();
+        return work > 0 && exponent > 0 && work - exponent >= 0.25 && fixedOverheadNanos() > 0;
+    }
+
+    /**
      * Whether bytes read per request grew with the table. When it did not, an index is bounding
      * the work and the latency growth has some other cause.
      */

@@ -787,6 +787,13 @@ public final class CliTables {
                     + "plan against\n");
         }
 
+        if (curve.fixedCostMasksScaling()) {
+            out.append(("  bytes read per request grew as rows^%.2f while service time grew as "
+                    + "rows^%.2f — the gap is about %s of fixed cost per request that does not "
+                    + "scale with the data, so the time exponent understates how this will grow\n")
+                    .formatted(curve.workExponent(), curve.exponent(),
+                            Numbers.latency(curve.fixedOverheadNanos())));
+        }
         if (curve.bytesPerRequestGrew()) {
             out.append("  bytes read per request grew with the table: the work is proportional to "
                     + "the data, not bounded by an index\n");
