@@ -95,6 +95,16 @@ public final class RunCommand implements Callable<Integer> {
     @Option(names = "--redis-threshold", description = "Redis p99 spike threshold (default 100ms).")
     String redisThreshold;
 
+    @Option(names = "--observe-db", description =
+            "Read-only connection to the TARGET's database, so the run can report how many "
+            + "queries the target ran per request. Attributable only when this run is the sole "
+            + "source of load.")
+    String observeDb;
+
+    @Option(names = "--observe-driver", description =
+            "Driver for --observe-db (default: ${DEFAULT-VALUE}).")
+    String observeDriver = "postgres";
+
     @Option(names = "--no-explain", description =
             "Skip the after-the-run diagnostics. By default a plan is taken for each database "
             + "query whose own p99 crossed --db-threshold, and the server's slowlog is read when "
@@ -133,6 +143,17 @@ public final class RunCommand implements Callable<Integer> {
         com.lockstep.analysis.SelfAudit selfAudit =
                 noSelfAudit ? null : com.lockstep.analysis.SelfAudit.start();
 
+        com.lockstep.runner.db.TargetObserver observer = null;
+        if (observeDb != null) {
+            try {
+                observer = com.lockstep.runner.db.TargetObserver.open(observeDb, observeDriver);
+                observer.before();
+            } catch (RuntimeException e) {
+                err.println(Ansi.error(e.getMessage()));
+                return EXIT_CONFIG_ERROR;
+            }
+        }
+
         RunProgress progress = new RunProgress();
         RunCoordinator.RunResult result;
         try (LiveProgress live = new LiveProgress(progress, config.duration(), System.err)) {
@@ -149,6 +170,13 @@ public final class RunCommand implements Callable<Integer> {
         } catch (RuntimeException e) {
             err.println(Ansi.error(e.getMessage() == null ? e.toString() : e.getMessage()));
             return EXIT_RUN_FAILED;
+        }
+
+        com.lockstep.analysis.TargetQueries targetQueries = null;
+        if (observer != null) {
+            try (var closing = observer) {
+                targetQueries = closing.after(appRequestCount(result));
+            }
         }
 
         com.lockstep.analysis.SelfAudit.Report auditReport = null;
@@ -184,6 +212,12 @@ public final class RunCommand implements Callable<Integer> {
                 out.println();
                 out.print(CliTables.distributionTable(name, loop));
             });
+        }
+
+        String targetSection = CliTables.targetQueriesTable(targetQueries);
+        if (!targetSection.isEmpty()) {
+            out.println();
+            out.print(targetSection);
         }
 
         List<com.lockstep.stats.Bucket> appTimeline = SpikeCorrelator.appTimelineOf(result);
@@ -293,6 +327,16 @@ public final class RunCommand implements Callable<Integer> {
         out.println(CliTables.precisionNote());
         out.flush();
         return EXIT_SUCCESS;
+    }
+
+    /** Requests the application-side runner actually executed — the denominator for per-request
+     * figures about the target. */
+    private static long appRequestCount(RunCoordinator.RunResult result) {
+        var loop = result.byRunner().get("http");
+        if (loop == null) {
+            loop = result.byRunner().get("scenario");
+        }
+        return loop == null ? 0 : loop.executedCount();
     }
 
     private static double appDeliveryRatio(RunCoordinator.RunResult result) {

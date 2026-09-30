@@ -518,6 +518,59 @@ public final class CliTables {
                 .formatted(Numbers.percent(HistogramRecorder.PERCENTILE_PRECISION)));
     }
 
+    public static String targetQueriesTable(com.lockstep.analysis.TargetQueries queries) {
+        if (queries == null) {
+            return "";
+        }
+        if (!queries.available()) {
+            return "target database\n" + Ansi.dim("  unavailable — "
+                    + queries.unavailableReason() + "\n");
+        }
+        if (!queries.hasObservations()) {
+            return "target database\n" + Ansi.dim(
+                    "  the target ran no queries against a table the statistics views track\n");
+        }
+
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"RELATION", "SEQ_SCANS", "IDX_SCANS", "SCANS/REQ", "ROWS_READ"});
+        for (var relation : queries.byScansDescending()) {
+            rows.add(new String[] {
+                relation.name(),
+                Numbers.withSeparators(relation.sequentialScans()),
+                Numbers.withSeparators(relation.indexScans()),
+                "%.1f".formatted(queries.scansPerRequest(relation)),
+                Numbers.withSeparators(relation.rowsRead()),
+            });
+        }
+
+        StringBuilder out = new StringBuilder("target database\n").append(render(rows));
+        out.append(("  %s requests read %s rows each\n").formatted(
+                Numbers.withSeparators(queries.requests()),
+                Numbers.withSeparators((long) queries.rowsPerRequest())));
+
+        if (queries.canJudgeStatementCount()) {
+            out.append(("  %.1f statements per request\n")
+                    .formatted(queries.statementsPerRequest()));
+            if (queries.manyStatementsPerRequest()) {
+                out.append(Ansi.accent("! the target sent %.1f statements for every request"
+                                .formatted(queries.statementsPerRequest())))
+                        .append(" — often a loop that should have been one query, though a "
+                                + "genuinely multi-step endpoint looks the same\n");
+            }
+        } else {
+            out.append(Ansi.dim("  statements per request unavailable: pg_stat_statements is not "
+                    + "installed\n"));
+            out.append(Ansi.dim("  without it an N+1 cannot be identified — the scan counts above "
+                    + "are plan-node executions, and a nested-loop join scans its inner table "
+                    + "once per outer row exactly as an application-side loop does\n"));
+        }
+
+        out.append(Ansi.dim("  per-database and a lower bound: the target's background jobs and "
+                + "other clients are included, and its idle pooled connections may not have "
+                + "reported their final second\n"));
+        return out.toString();
+    }
+
     public static String writeAmplificationTable(
             com.lockstep.analysis.WriteAmplification amplification) {
         if (amplification == null) {
