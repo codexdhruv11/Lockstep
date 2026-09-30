@@ -518,6 +518,121 @@ public final class CliTables {
                 .formatted(Numbers.percent(HistogramRecorder.PERCENTILE_PRECISION)));
     }
 
+    public static String growthCurveTable(com.lockstep.analysis.GrowthCurve curve) {
+        if (curve == null || curve.points().isEmpty()) {
+            return "";
+        }
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"ROWS", "SERVICE_P99", "LATENCY_P99", "BYTES/REQ", "HIT%",
+            "DELIVERED"});
+        for (var point : curve.points()) {
+            rows.add(new String[] {
+                Numbers.withSeparators(point.rows()),
+                Numbers.latency(point.serviceP99Nanos()),
+                Numbers.latency(point.latencyP99Nanos()),
+                point.bytesPerRequest() <= 0 ? "-" : Numbers.bytes(point.bytesPerRequest()),
+                point.hitRatio() < 0 ? "-" : Numbers.percent(point.hitRatio()),
+                Numbers.rate(point.deliveredRatePerSecond()),
+            });
+        }
+        return "growth curve\n" + render(rows);
+    }
+
+    public static String growthCurveVerdict(com.lockstep.analysis.GrowthCurve curve,
+            long budgetNanos, Long rowsPerDay, String table) {
+        if (curve == null || curve.points().size() < 2) {
+            return Ansi.dim("growth: not enough measurements to describe a curve\n");
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("service time grows as rows^%.2f (R%s %.3f) — %s\n".formatted(
+                curve.exponent(), "²", curve.rSquared(), describe(curve.shape())));
+
+        long cliff = curve.cacheCliffAtRows();
+        if (cliff > 0) {
+            out.append(Ansi.accent("! the buffer cache stopped holding the working set at about "
+                    + Numbers.withSeparators(cliff) + " rows\n"));
+            out.append("    latency steps there rather than curving, so one exponent does not "
+                    + "describe both sides of it — this is the knee, and it is the number to "
+                    + "plan against\n");
+        }
+
+        if (curve.bytesPerRequestGrew()) {
+            out.append("  bytes read per request grew with the table: the work is proportional to "
+                    + "the data, not bounded by an index\n");
+        } else if (curve.shape() == com.lockstep.analysis.GrowthCurve.Shape.FLAT) {
+            out.append("  bytes read per request did not grow — an index is bounding the work\n");
+        }
+
+        if (budgetNanos > 0) {
+            out.append(budgetLine(curve, budgetNanos, rowsPerDay, table));
+        }
+
+        if (!curve.extrapolatable()) {
+            out.append(Ansi.dim("  not extrapolating: "
+                    + whyNotExtrapolatable(curve) + "\n"));
+        }
+        out.append(Ansi.dim("  measured on this machine, with this data shape; the exponent "
+                + "transfers, the absolute latencies do not\n"));
+        return out.toString();
+    }
+
+    private static String budgetLine(com.lockstep.analysis.GrowthCurve curve, long budgetNanos,
+            Long rowsPerDay, String table) {
+        if (curve.budgetAlreadyExceeded(budgetNanos)) {
+            return Ansi.accent("! the service-time budget of " + Numbers.latency(budgetNanos)
+                    + " is already exceeded at the smallest measurement\n");
+        }
+        long atBudget = curve.rowsAtBudget(budgetNanos);
+        if (atBudget <= 0) {
+            return "  budget " + Numbers.latency(budgetNanos)
+                    + ": cannot say where it breaks from these measurements\n";
+        }
+        StringBuilder line = new StringBuilder("  budget %s: %s reaches it at about %s rows"
+                .formatted(Numbers.latency(budgetNanos), table,
+                        Numbers.withSeparators(atBudget)));
+        if (rowsPerDay != null && rowsPerDay > 0) {
+            long current = curve.points().get(curve.points().size() - 1).rows();
+            long headroom = atBudget - current;
+            if (headroom <= 0) {
+                line.append(", which is at or below the current row count");
+            } else {
+                long days = headroom / rowsPerDay;
+                line.append(", which at %s rows/day is %s days away"
+                        .formatted(Numbers.withSeparators(rowsPerDay),
+                                Numbers.withSeparators(days)));
+            }
+        }
+        return line.append('\n').toString();
+    }
+
+    private static String whyNotExtrapolatable(com.lockstep.analysis.GrowthCurve curve) {
+        if (curve.spansCacheCliff()) {
+            return "the measurements cross a cache cliff, and a power law through a step is "
+                    + "a number that looks authoritative and is not";
+        }
+        if (curve.points().size() < com.lockstep.analysis.GrowthCurve.MIN_POINTS) {
+            return "fewer than " + com.lockstep.analysis.GrowthCurve.MIN_POINTS
+                    + " usable measurements";
+        }
+        if (curve.rSquared() < com.lockstep.analysis.GrowthCurve.MIN_R_SQUARED) {
+            return "the points do not fit a power law well (R² %.3f, needs %.2f)"
+                    .formatted(curve.rSquared(),
+                            com.lockstep.analysis.GrowthCurve.MIN_R_SQUARED);
+        }
+        return "latency does not grow with the data, so there is no crossing to find";
+    }
+
+    private static String describe(com.lockstep.analysis.GrowthCurve.Shape shape) {
+        return switch (shape) {
+            case FLAT -> "flat: the row count barely matters";
+            case SUBLINEAR -> "sublinear: grows more slowly than the table";
+            case LINEAR -> "linear: cost is proportional to the row count, the shape of a scan";
+            case SUPERLINEAR -> "superlinear: getting worse faster than the table grows";
+            case UNKNOWN -> "not enough signal to name a shape";
+        };
+    }
+
     public static String resourceTable(com.lockstep.analysis.ResourceAccounting accounting) {
         if (accounting == null) {
             return "";
