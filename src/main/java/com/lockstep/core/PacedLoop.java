@@ -3,6 +3,7 @@ package com.lockstep.core;
 import com.lockstep.stats.BucketSeries;
 import com.lockstep.stats.ErrorCounts;
 import com.lockstep.stats.HistogramRecorder;
+import com.lockstep.stats.SlowestRequests;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
@@ -42,6 +43,7 @@ public final class PacedLoop {
         LongAdder inFlight = new LongAdder();
 
         ErrorCounts errors = new ErrorCounts();
+        SlowestRequests slowest = new SlowestRequests();
         LongAdder lateFires = new LongAdder();
         AtomicLong maxLatenessNanos = new AtomicLong();
         long scheduledCount = 0;
@@ -50,7 +52,8 @@ public final class PacedLoop {
         ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
         try {
             for (int i = 0; i < workerCount; i++) {
-                workers.submit(() -> drain(queue, accepting, recorder, operation, context, progress, inFlight, errors));
+                workers.submit(() -> drain(queue, accepting, recorder, operation, context, progress,
+                        inFlight, errors, slowest));
             }
 
             for (long hit = 1; ; hit++) {
@@ -83,19 +86,22 @@ public final class PacedLoop {
             long abandoned = drained ? 0 : Math.max(0, inFlight.sum());
             return new LoopResult(recorder.snapshot(), scheduledCount, shed.sum(), abandoned,
                     lateFires.sum(), maxLatenessNanos.get(),
-                    pacer.expectedHits(context.durationNanos()), drained, errors.snapshot());
+                    pacer.expectedHits(context.durationNanos()), drained, errors.snapshot(),
+                    slowest.snapshot());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             workers.shutdownNow();
             return new LoopResult(recorder.snapshot(), scheduledCount, shed.sum(), inFlight.sum(),
                     lateFires.sum(), maxLatenessNanos.get(),
-                    pacer.expectedHits(context.durationNanos()), false, errors.snapshot());
+                    pacer.expectedHits(context.durationNanos()), false, errors.snapshot(),
+                    slowest.snapshot());
         }
     }
 
     private static void drain(BlockingQueue<Long> queue, AtomicBoolean accepting,
             HistogramRecorder recorder, Operation operation, RunContext context,
-            RunProgress.Counter progress, LongAdder inFlight, ErrorCounts errors) {
+            RunProgress.Counter progress, LongAdder inFlight, ErrorCounts errors,
+            SlowestRequests slowest) {
         while (true) {
             Long scheduledOffset;
             try {
@@ -112,7 +118,7 @@ public final class PacedLoop {
             }
             inFlight.increment();
             try {
-                execute(recorder, operation, context, scheduledOffset, progress, errors);
+                execute(recorder, operation, context, scheduledOffset, progress, errors, slowest);
             } finally {
                 inFlight.decrement();
             }
@@ -121,7 +127,7 @@ public final class PacedLoop {
 
     private static void execute(HistogramRecorder recorder, Operation operation,
             RunContext context, long scheduledOffset, RunProgress.Counter progress,
-            ErrorCounts errors) {
+            ErrorCounts errors, SlowestRequests slowest) {
         long scheduledNanoTime = context.deadlineFor(scheduledOffset);
         long startedAt = System.nanoTime();
         Operation.Outcome outcome;
@@ -135,12 +141,14 @@ public final class PacedLoop {
         if (!outcome.success()) {
             errors.record(outcome.failure());
         }
+        long latencyNanos = finishedAt - scheduledNanoTime;
         recorder.record(
                 scheduledOffset,
-                finishedAt - scheduledNanoTime,
+                latencyNanos,
                 finishedAt - startedAt,
                 outcome.success(),
                 outcome.statusCode());
+        slowest.record(latencyNanos, outcome.traceId(), scheduledOffset);
         if (progress != null) {
             progress.record(outcome.success());
         }
@@ -169,18 +177,28 @@ public final class PacedLoop {
             long maxLatenessNanos,
             long expectedHits,
             boolean drainedCleanly,
-            java.util.Map<String, Long> errorCounts) {
+            java.util.Map<String, Long> errorCounts,
+            java.util.List<SlowestRequests.Entry> slowestRequests) {
         public LoopResult {
             errorCounts = errorCounts == null
                     ? java.util.Map.of()
                     : java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(errorCounts));
+            slowestRequests = slowestRequests == null
+                    ? java.util.List.of() : java.util.List.copyOf(slowestRequests);
         }
 
         public LoopResult(BucketSeries series, long scheduledCount, long shedCount,
                 long abandonedCount, long lateFireCount, long maxLatenessNanos, long expectedHits,
                 boolean drainedCleanly) {
             this(series, scheduledCount, shedCount, abandonedCount, lateFireCount, maxLatenessNanos,
-                    expectedHits, drainedCleanly, java.util.Map.of());
+                    expectedHits, drainedCleanly, java.util.Map.of(), java.util.List.of());
+        }
+
+        public LoopResult(BucketSeries series, long scheduledCount, long shedCount,
+                long abandonedCount, long lateFireCount, long maxLatenessNanos, long expectedHits,
+                boolean drainedCleanly, java.util.Map<String, Long> errorCounts) {
+            this(series, scheduledCount, shedCount, abandonedCount, lateFireCount, maxLatenessNanos,
+                    expectedHits, drainedCleanly, errorCounts, java.util.List.of());
         }
 
         public long executedCount() {

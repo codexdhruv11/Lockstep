@@ -35,8 +35,13 @@ public final class RunCoordinator {
 
     public static RunResult execute(Config config, RunProgress progress, long explainThresholdNanos,
             long redisThresholdNanos) {
+        return execute(config, progress, explainThresholdNanos, redisThresholdNanos, false);
+    }
+
+    public static RunResult execute(Config config, RunProgress progress, long explainThresholdNanos,
+            long redisThresholdNanos, boolean trace) {
         int concurrency = config.concurrency() <= 0 ? RunContext.DEFAULT_CONCURRENCY : config.concurrency();
-        List<Runner> runners = build(config, concurrency);
+        List<Runner> runners = build(config, concurrency, trace);
         RunContext context = RunContext.startingAfterSetup(
                 config.duration(), config.bucketWidth(), config.ramp(), config.concurrency(),
                 0L, config.arrivalModel(), config.arrivalSeed());
@@ -62,13 +67,17 @@ public final class RunCoordinator {
     }
 
     static List<Runner> build(Config config, int concurrency) {
+        return build(config, concurrency, false);
+    }
+
+    static List<Runner> build(Config config, int concurrency, boolean trace) {
         List<Runner> runners = new ArrayList<>();
         try {
             if (config.http() != null) {
-                runners.add(HttpRunner.create(config.http(), concurrency));
+                runners.add(HttpRunner.create(config.http(), concurrency, trace));
             }
             if (!config.scenario().isEmpty()) {
-                runners.add(ScenarioRunner.create(config.scenario(), scenarioRate(config)));
+                runners.add(ScenarioRunner.create(config.scenario(), scenarioRate(config), trace));
             }
             if (config.db() != null) {
                 runners.add(DbRunner.create(config.db(), concurrency));

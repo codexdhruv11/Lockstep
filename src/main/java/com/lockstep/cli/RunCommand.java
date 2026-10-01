@@ -95,6 +95,13 @@ public final class RunCommand implements Callable<Integer> {
     @Option(names = "--redis-threshold", description = "Redis p99 spike threshold (default 100ms).")
     String redisThreshold;
 
+    @Option(names = "--trace", description =
+            "Send a W3C traceparent header with every request, so the target's own "
+            + "OpenTelemetry instrumentation ties its spans to it. The report then prints the "
+            + "trace IDs of the slowest requests. Off by default: the header is sampled, so the "
+            + "target would export a trace for every request, and most backends bill per span.")
+    boolean trace;
+
     @Option(names = "--observe-db", description =
             "Read-only connection to the TARGET's database, so the run can report how many "
             + "queries the target ran per request. Attributable only when this run is the sole "
@@ -166,7 +173,8 @@ public final class RunCommand implements Callable<Integer> {
 
             result = RunCoordinator.execute(config, progress,
                     noExplain ? 0 : thresholds.dbNanos(),
-                    noExplain ? 0 : thresholds.redisNanos());
+                    noExplain ? 0 : thresholds.redisNanos(),
+                    trace);
             if (!noProgress) {
                 live.printTotals();
             }
@@ -228,6 +236,11 @@ public final class RunCommand implements Callable<Integer> {
         if (!targetSection.isEmpty()) {
             out.println();
             out.print(targetSection);
+        }
+        String traceSection = CliTables.slowestRequestsTable(result, trace);
+        if (!traceSection.isEmpty()) {
+            out.println();
+            out.print(traceSection);
         }
         String bottleneckSection = CliTables.bottleneckTable(bottleneck);
         if (!bottleneckSection.isEmpty()) {

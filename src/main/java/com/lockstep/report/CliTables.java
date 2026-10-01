@@ -518,6 +518,51 @@ public final class CliTables {
                 .formatted(Numbers.percent(HistogramRecorder.PERCENTILE_PRECISION)));
     }
 
+    public static String slowestRequestsTable(RunCoordinator.RunResult result, boolean traced) {
+        if (result == null) {
+            return "";
+        }
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[] {"RUNNER", "TIME", "LATENCY", "TRACE"});
+        boolean anyTraceId = false;
+        for (var entry : result.byRunner().entrySet()) {
+            var slowest = entry.getValue().slowestRequests();
+            int shown = 0;
+            for (var request : slowest) {
+                if (shown++ >= 5) {
+                    break;
+                }
+                if (request.traceId() != null) {
+                    anyTraceId = true;
+                }
+                rows.add(new String[] {
+                    entry.getKey(),
+                    Numbers.clock(request.scheduledOffsetNanos()),
+                    Numbers.latency(request.latencyNanos()),
+                    request.traceId() == null ? "-" : request.traceId(),
+                });
+            }
+        }
+        if (rows.size() == 1) {
+            return "";
+        }
+
+        StringBuilder out = new StringBuilder("slowest requests\n").append(render(rows));
+        if (anyTraceId) {
+            out.append(Ansi.dim("  look these IDs up in your trace backend to see where inside "
+                    + "the target the time went — this is the only way to tell application time "
+                    + "from serialisation from a query\n"));
+        } else if (!traced) {
+            out.append(Ansi.dim("  no trace IDs: run with --trace to send a W3C traceparent, and "
+                    + "an OpenTelemetry-instrumented target will link its spans to these "
+                    + "requests\n"));
+        } else {
+            out.append(Ansi.dim("  tracing was on but no IDs were recorded, which means these "
+                    + "requests never reached the runner that sends the header\n"));
+        }
+        return out.toString();
+    }
+
     public static String bottleneckTable(com.lockstep.analysis.Bottleneck bottleneck) {
         if (bottleneck == null) {
             return "";

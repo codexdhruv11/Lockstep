@@ -4,6 +4,7 @@ import com.lockstep.config.HttpConfig;
 import com.lockstep.core.Operation;
 import com.lockstep.core.PacedLoop;
 import com.lockstep.core.RunContext;
+import com.lockstep.core.TraceContext;
 import com.lockstep.core.RunProgress;
 import com.lockstep.core.Runner;
 import com.lockstep.runner.QueryLabels;
@@ -28,20 +29,26 @@ public final class HttpRunner implements Runner {
     private final WeightedPicker<Endpoint> endpoints;
     private final List<String> targetLabels;
     private final int rate;
+    private final boolean trace;
     private final AtomicReference<String> lastFailure = new AtomicReference<>();
 
     private volatile HistogramRecorder[] targetRecorders;
     private volatile RunContext runContext;
 
     private HttpRunner(HttpClient client, WeightedPicker<Endpoint> endpoints,
-            List<String> targetLabels, int rate) {
+            List<String> targetLabels, int rate, boolean trace) {
         this.client = client;
         this.endpoints = endpoints;
         this.targetLabels = targetLabels;
         this.rate = rate;
+        this.trace = trace;
     }
 
     public static HttpRunner create(HttpConfig config, int concurrency) {
+        return create(config, concurrency, false);
+    }
+
+    public static HttpRunner create(HttpConfig config, int concurrency, boolean trace) {
         List<HttpConfig.Target> targets = config.allTargets();
         HttpClient client = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
@@ -59,7 +66,7 @@ public final class HttpRunner implements Runner {
         }
 
         return new HttpRunner(client, new WeightedPicker<>(endpoints, Endpoint::weight, true),
-                QueryLabels.forTargets(methods, urls), config.rate());
+                QueryLabels.forTargets(methods, urls), config.rate(), trace);
     }
 
     private record Endpoint(HttpRequest.Builder request, int weight) {}
@@ -108,17 +115,24 @@ public final class HttpRunner implements Runner {
         int index = endpoints.pickIndex();
         long startedAt = System.nanoTime();
         Operation.Outcome outcome = Operation.Outcome.OK;
+        String traceparent = trace ? TraceContext.newHeader() : null;
         try {
-            outcome = send(endpoints.items().get(index).request());
+            outcome = send(endpoints.items().get(index).request(), traceparent)
+                    .withTraceId(TraceContext.traceIdOf(traceparent));
             return outcome;
         } finally {
             recordTarget(index, scheduledOffsetNanos, startedAt, outcome);
         }
     }
 
-    private Operation.Outcome send(HttpRequest.Builder template) {
+    private Operation.Outcome send(HttpRequest.Builder template, String traceparent) {
         try {
-            HttpResponse<Void> response = client.send(template.build(), HttpResponse.BodyHandlers.discarding());
+            // copy() per request: the template is shared across every virtual thread, and
+            // mutating it to add a header would race and could attach another request's id.
+            HttpRequest request = traceparent == null
+                    ? template.build()
+                    : template.copy().header(TraceContext.HEADER, traceparent).build();
+            HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
             int status = response.statusCode();
             if (status >= 200 && status < 400) {
                 return Operation.Outcome.ok(status);

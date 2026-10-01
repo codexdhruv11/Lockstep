@@ -4,6 +4,7 @@ import com.lockstep.config.ScenarioConfig;
 import com.lockstep.core.Operation;
 import com.lockstep.core.PacedLoop;
 import com.lockstep.core.RunContext;
+import com.lockstep.core.TraceContext;
 import com.lockstep.core.RunProgress;
 import com.lockstep.core.Runner;
 import com.lockstep.runner.WeightedPicker;
@@ -28,6 +29,7 @@ public final class ScenarioRunner implements Runner {
     private final HttpClient client;
     private final WeightedPicker<Journey> journeys;
     private final int rate;
+    private final boolean trace;
     private final AtomicReference<String> lastFailure = new AtomicReference<>();
 
     private final Map<String, HistogramRecorder> journeyRecorders = new java.util.concurrent.ConcurrentHashMap<>();
@@ -35,10 +37,12 @@ public final class ScenarioRunner implements Runner {
     private volatile long bucketWidthNanos;
     private volatile int bucketCount;
 
-    private ScenarioRunner(HttpClient client, WeightedPicker<Journey> journeys, int rate) {
+    private ScenarioRunner(HttpClient client, WeightedPicker<Journey> journeys, int rate,
+            boolean trace) {
         this.client = client;
         this.journeys = journeys;
         this.rate = rate;
+        this.trace = trace;
     }
 
     public record Journey(String name, int weight, List<Step> steps) {
@@ -56,6 +60,10 @@ public final class ScenarioRunner implements Runner {
     }
 
     public static ScenarioRunner create(List<ScenarioConfig> scenarios, int rate) {
+        return create(scenarios, rate, false);
+    }
+
+    public static ScenarioRunner create(List<ScenarioConfig> scenarios, int rate, boolean trace) {
         List<Journey> journeys = new ArrayList<>();
         for (ScenarioConfig scenario : scenarios) {
             List<Step> steps = new ArrayList<>();
@@ -77,7 +85,8 @@ public final class ScenarioRunner implements Runner {
                 .connectTimeout(REQUEST_TIMEOUT)
                 .build();
 
-        return new ScenarioRunner(client, new WeightedPicker<>(journeys, Journey::weight, true), rate);
+        return new ScenarioRunner(client, new WeightedPicker<>(journeys, Journey::weight, true),
+                rate, trace);
     }
 
     private static void validateUrlTemplate(String scenarioName, String url) {
@@ -127,11 +136,14 @@ public final class ScenarioRunner implements Runner {
         Map<String, Object> vars = new HashMap<>();
         int lastStatus = 0;
         long journeyStart = System.nanoTime();
+        // One trace id for the whole journey, a new span id per step, so the backend shows the
+        // journey as a single trace with a span per request rather than as unrelated calls.
+        String journeyTraceId = trace ? TraceContext.newTraceId() : null;
 
         for (int index = 0; index < journey.steps().size(); index++) {
             Step step = journey.steps().get(index);
             long stepStart = System.nanoTime();
-            StepOutcome outcome = executeStep(journey, index, step, vars);
+            StepOutcome outcome = executeStep(journey, index, step, vars, journeyTraceId);
             long stepNanos = System.nanoTime() - stepStart;
 
             recorderFor(stepRecorders, stepKey(journey, index, step))
@@ -141,14 +153,16 @@ public final class ScenarioRunner implements Runner {
             if (!outcome.success()) {
                 lastFailure.set(outcome.failure());
                 recordJourney(journey, scheduledOffsetNanos, journeyStart, false, outcome.status());
-                return outcome.status() > 0
+                return (outcome.status() > 0
                         ? Operation.Outcome.failed(outcome.status(), outcome.failure())
-                        : Operation.Outcome.failed(outcome.failure());
+                        : Operation.Outcome.failed(outcome.failure()))
+                        .withTraceId(journeyTraceId);
             }
             lastStatus = outcome.status();
         }
         recordJourney(journey, scheduledOffsetNanos, journeyStart, true, lastStatus);
-        return lastStatus > 0 ? Operation.Outcome.ok(lastStatus) : Operation.Outcome.OK;
+        return (lastStatus > 0 ? Operation.Outcome.ok(lastStatus) : Operation.Outcome.OK)
+                .withTraceId(journeyTraceId);
     }
 
     private void recordJourney(Journey journey, long scheduledOffsetNanos, long journeyStartNanoTime,
@@ -242,7 +256,8 @@ public final class ScenarioRunner implements Runner {
 
     private record StepOutcome(boolean success, int status, String failure) {}
 
-    private StepOutcome executeStep(Journey journey, int index, Step step, Map<String, Object> vars) {
+    private StepOutcome executeStep(Journey journey, int index, Step step, Map<String, Object> vars,
+            String journeyTraceId) {
         String where = "scenario \"" + journey.name() + "\" step " + index;
         String url = Template.render(step.urlTemplate(), vars);
         if (Template.hasUnresolved(url)) {
@@ -252,6 +267,10 @@ public final class ScenarioRunner implements Runner {
             HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).timeout(REQUEST_TIMEOUT);
             step.headerTemplates().forEach((headerName, template) ->
                     builder.header(headerName, Template.render(template, vars)));
+            if (journeyTraceId != null) {
+                builder.header(TraceContext.HEADER,
+                        TraceContext.header(journeyTraceId, TraceContext.newSpanId()));
+            }
             String body = Template.render(step.bodyTemplate(), vars);
             builder.method(step.method(), body.isEmpty()
                     ? HttpRequest.BodyPublishers.noBody()
