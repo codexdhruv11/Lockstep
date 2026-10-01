@@ -77,6 +77,10 @@ That runs a two-step login journey against the demo server and writes `report.ht
 ## The workflow on a real target
 
 ```sh
+# 0. ask what already costs the most. Read-only, generates no load.
+lockstep survey --db postgres://user:pw@host:5432/appdb \
+    --metrics http://host/actuator/prometheus
+
 # 1. find the rate at which it stops keeping up, rather than guessing one
 lockstep find-capacity -c config.yaml --step=15s
 
@@ -93,6 +97,13 @@ lockstep growth-curve -c config.yaml --table signals \
     --seed "INSERT INTO signals (payload) SELECT repeat('x',200) FROM generate_series(1,{{n}})" \
     --steps 25000,50000,100000,200000 --budget 500ms --rows-per-day 2000 --allow-writes
 ```
+
+Start with `survey`. Every other command needs a target named in a config, so none of them can
+answer the first question: on a service with hundreds of endpoints, *which one is the problem*. A
+load test cannot answer that — only real traffic can, and the counters holding the answer are
+already in your database. `survey` ranks queries by total time, tables by the rows read
+sequentially from them, indexes nothing reads, and endpoints by total time, then says what to
+point a run at.
 
 Three flags do most of the work of not fooling yourself:
 

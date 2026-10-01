@@ -518,6 +518,155 @@ public final class CliTables {
                 .formatted(Numbers.percent(HistogramRecorder.PERCENTILE_PRECISION)));
     }
 
+    public static String surveyReport(com.lockstep.analysis.Survey survey, int top) {
+        if (survey == null || !survey.available()) {
+            return "";
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("survey · ").append(survey.database()).append('\n');
+        if (survey.countersSince() != null) {
+            out.append(Ansi.dim("  counters accumulated since " + survey.countersSince()
+                    + " (" + survey.countersAgeDays() + " days)\n"));
+        } else {
+            out.append(Ansi.dim("  counters have never been reset on this database\n"));
+        }
+
+        if (survey.looksIdle()) {
+            out.append('\n').append(Ansi.accent("! this database has barely been queried"))
+                    .append(" — every ranking below is meaningless on a database that has not "
+                            + "served real traffic. Run this against production, or against a "
+                            + "replica of it.\n");
+        }
+
+        // --- statements ---
+        out.append('\n');
+        if (!survey.statementsAvailable()) {
+            out.append("queries by total time\n")
+                    .append(Ansi.dim("  " + survey.statementsUnavailableReason() + "\n"));
+        } else if (survey.statements().isEmpty()) {
+            out.append("queries by total time\n")
+                    .append(Ansi.dim("  pg_stat_statements is present but has recorded nothing\n"));
+        } else {
+            List<String[]> rows = new ArrayList<>();
+            rows.add(new String[] {"SHARE", "TOTAL", "CALLS", "MEAN", "STATEMENT"});
+            for (var statement : survey.statementsByTotalTime(top)) {
+                double share = survey.shareOfTotalTime(statement);
+                rows.add(new String[] {
+                    share < 0 ? "-" : Numbers.percent(share),
+                    Numbers.latency((long) (statement.totalMillis() * 1_000_000d)),
+                    Numbers.withSeparators(statement.calls()),
+                    Numbers.latency((long) (statement.meanMillis() * 1_000_000d)),
+                    statement.oneLine(64),
+                });
+            }
+            out.append("queries by total time\n").append(render(rows));
+            out.append(Ansi.dim("  ranked by total time, not mean: a statement called a million "
+                    + "times that is individually quick is usually where the time goes\n"));
+        }
+
+        // --- tables ---
+        var relations = survey.relationsBySequentialRows(top);
+        if (!relations.isEmpty()) {
+            List<String[]> rows = new ArrayList<>();
+            rows.add(new String[] {"RELATION", "SEQ_SCANS", "ROWS/SCAN", "SIZE", "NOTE"});
+            for (var relation : relations) {
+                String note = relation.likelyMissingIndex()
+                        ? "an index is likely missing"
+                        : relation.smallEnoughThatScanningIsFine()
+                                ? "small; scanning it is fine"
+                                : "";
+                rows.add(new String[] {
+                    relation.name(),
+                    Numbers.withSeparators(relation.sequentialScans()),
+                    Numbers.withSeparators(relation.rowsPerScan()),
+                    Numbers.bytes(relation.tableBytes()),
+                    note,
+                });
+            }
+            out.append('\n').append("tables read sequentially\n").append(render(rows));
+        }
+
+        // --- indexes ---
+        var unused = survey.unusedIndexes(top);
+        if (!unused.isEmpty()) {
+            List<String[]> rows = new ArrayList<>();
+            rows.add(new String[] {"INDEX", "TABLE", "SIZE", "NOTE"});
+            for (var index : unused) {
+                rows.add(new String[] {
+                    index.name(), index.table(), Numbers.bytes(index.indexBytes()),
+                    index.primaryKey() ? "PRIMARY KEY — do not drop"
+                            : index.unique() ? "UNIQUE — enforces a constraint, do not drop"
+                            : "write cost with no reads",
+                });
+            }
+            out.append('\n').append("indexes never read\n").append(render(rows));
+            long droppable = survey.unusedIndexBytes();
+            if (droppable > 0) {
+                out.append("  ").append(Numbers.bytes(droppable))
+                        .append(" of indexes are read by nothing and enforce no constraint\n");
+            }
+            out.append(Ansi.dim("  a unique or primary-key index that is never used for a lookup "
+                    + "is still doing its job; only the others are dead weight\n"));
+        }
+
+        // --- endpoints ---
+        var endpoints = survey.endpointsByTotalTime(top);
+        if (!endpoints.isEmpty()) {
+            List<String[]> rows = new ArrayList<>();
+            rows.add(new String[] {"SHARE", "TOTAL", "COUNT", "MEAN", "ENDPOINT"});
+            double total = survey.totalEndpointSeconds();
+            for (var endpoint : endpoints) {
+                rows.add(new String[] {
+                    total > 0 ? Numbers.percent(endpoint.totalSeconds() / total) : "-",
+                    Numbers.latency((long) (endpoint.totalSeconds() * 1_000_000_000d)),
+                    Numbers.withSeparators(endpoint.count()),
+                    endpoint.meanMillis() < 0 ? "-"
+                            : Numbers.latency((long) (endpoint.meanMillis() * 1_000_000d)),
+                    endpoint.label(),
+                });
+            }
+            out.append('\n').append("endpoints by total time\n").append(render(rows));
+            out.append(Ansi.dim("  tagged by URI template, so every id collapses into one row — "
+                    + "a single slow row cannot be distinguished here\n"));
+        }
+
+        out.append('\n').append(nextSteps(survey));
+        return out.toString();
+    }
+
+    /** Turns the rankings into the command to run next, which is the point of surveying. */
+    private static String nextSteps(com.lockstep.analysis.Survey survey) {
+        StringBuilder out = new StringBuilder("what to do with this\n");
+        var worstEndpoint = survey.endpointsByTotalTime(1);
+        var missingIndex = survey.relationsBySequentialRows(20).stream()
+                .filter(com.lockstep.analysis.Survey.Relation::likelyMissingIndex)
+                .findFirst();
+        long droppable = survey.unusedIndexBytes();
+
+        if (!worstEndpoint.isEmpty()) {
+            out.append("  point a run at ").append(worstEndpoint.get(0).label())
+                    .append(" — it accounts for the most server time\n");
+        }
+        if (missingIndex.isPresent()) {
+            var relation = missingIndex.get();
+            out.append("  ").append(relation.name()).append(" is scanned ")
+                    .append(Numbers.withSeparators(relation.sequentialScans()))
+                    .append(" times at ").append(Numbers.withSeparators(relation.rowsPerScan()))
+                    .append(" rows a scan; find the statement above that reads it\n");
+        }
+        if (droppable > 0) {
+            out.append("  ").append(Numbers.bytes(droppable))
+                    .append(" of unused, unconstrained index — check write amplification before "
+                            + "and after dropping it\n");
+        }
+        if (worstEndpoint.isEmpty() && missingIndex.isEmpty() && droppable == 0) {
+            out.append(Ansi.dim("  nothing stands out. Either this database is healthy or its "
+                    + "counters are too young to say.\n"));
+        }
+        return out.toString();
+    }
+
     public static String targetMetricsTable(com.lockstep.analysis.TargetMetrics metrics,
             long clientMeanNanos, long runDurationNanos) {
         if (metrics == null) {
