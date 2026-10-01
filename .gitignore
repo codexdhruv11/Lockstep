@@ -6,3 +6,9 @@ results*.json
 .idea/
 *.iml
 .vscode/
+
+# Working notes and design docs stay local. PROGRESS.md and ROADMAP.md name a private
+# product and quote its figures; the rest is an engineering log that was never meant to
+# be published. README.md (and otel/README.md) are the only markdown this repo ships.
+PROGRESS.md
+docs/

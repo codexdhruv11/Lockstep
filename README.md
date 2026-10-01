@@ -617,4 +617,4 @@ compare/    run-to-run diff and the CI gate
 demo/       demo server and database seeder
 ```
 
-`docs/PITFALLS.md` explains the measurement traps this tool is built to avoid.
+The measurement traps this tool is built to avoid are documented in the source, beside the code that avoids them.
