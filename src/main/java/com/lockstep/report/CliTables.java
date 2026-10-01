@@ -455,6 +455,12 @@ public final class CliTables {
     public static String selfAuditTable(com.lockstep.analysis.SelfAudit.Report audit,
             com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation,
             long bucketWidthNanos) {
+        return selfAuditTable(audit, correlation, bucketWidthNanos, 0);
+    }
+
+    public static String selfAuditTable(com.lockstep.analysis.SelfAudit.Report audit,
+            com.lockstep.analysis.SpikeCorrelator.CorrelationResult correlation,
+            long bucketWidthNanos, long runDurationNanos) {
         if (audit == null) {
             return "";
         }
@@ -464,9 +470,8 @@ public final class CliTables {
         }
         if (!audit.hasPauses()) {
             return "generator self-audit\n"
-                    + Ansi.dim("  no JVM pause above "
-                        + Numbers.latency(com.lockstep.analysis.SelfAudit.SIGNIFICANT_PAUSE_NANOS)
-                        + " in this run; the latencies above are the target's, not this process's")
+                    + Ansi.dim("  this process was not paused at all during the run; the "
+                        + "latencies above are the target's, not this process's")
                     + "\n";
         }
 
@@ -477,31 +482,57 @@ public final class CliTables {
             }
         }
 
-        List<String[]> rows = new ArrayList<>();
-        rows.add(new String[] {"TIME", "PAUSED", "EVENT", "NOTE"});
-        int contaminated = 0;
-        for (var pause : audit.longestPauses()) {
-            boolean overlapsSpike = spikeBuckets.contains(pause.bucketIndex());
-            if (overlapsSpike) {
-                contaminated++;
+        StringBuilder out = new StringBuilder("generator self-audit\n");
+        if (audit.hasSignificantPauses()) {
+            List<String[]> rows = new ArrayList<>();
+            rows.add(new String[] {"TIME", "PAUSED", "EVENT", "NOTE"});
+            for (var pause : audit.longestPauses()) {
+                rows.add(new String[] {
+                    Numbers.clock(pause.bucketIndex() * bucketWidthNanos),
+                    Numbers.latency(pause.durationNanos()),
+                    shortEventName(pause.eventName()),
+                    spikeBuckets.contains(pause.bucketIndex())
+                            ? "overlaps a reported spike" : "",
+                });
             }
-            rows.add(new String[] {
-                Numbers.clock(pause.bucketIndex() * bucketWidthNanos),
-                Numbers.latency(pause.durationNanos()),
-                shortEventName(pause.eventName()),
-                overlapsSpike ? "overlaps a reported spike" : "",
-            });
+            out.append(render(rows));
+            if (audit.significantPauseCount() > audit.longestPauses().size()) {
+                out.append(Ansi.dim("  the "
+                        + audit.longestPauses().size() + " longest of "
+                        + audit.significantPauseCount() + " pauses over "
+                        + Numbers.latency(com.lockstep.analysis.SelfAudit.SIGNIFICANT_PAUSE_NANOS)
+                        + "\n"));
+            }
+        } else {
+            // Many short pauses and no single long one. There is no row to point at, but the
+            // time was still taken out of the run, and a tail of 2-9ms pauses is what moves a
+            // p99 - so it has to be stated rather than filtered away.
+            out.append(Ansi.dim("  no single pause reached "
+                    + Numbers.latency(com.lockstep.analysis.SelfAudit.SIGNIFICANT_PAUSE_NANOS)
+                    + ", but the pauses below add up\n"));
         }
 
-        StringBuilder out = new StringBuilder("generator self-audit\n");
-        out.append(render(rows));
         out.append(Ansi.dim("  this process was paused for "
                 + Numbers.latency(audit.totalPausedNanos())
-                + " in total, across " + audit.gcPauseCount() + " GC pauses\n"));
-        if (contaminated > 0) {
-            out.append(Ansi.dim("  " + contaminated + " of these fall in a bucket reported as a "
-                    + "storage spike above - that latency was at least partly this process, "
-                    + "not the target\n"));
+                + " in total, "
+                + Numbers.percent(audit.pausedFractionOf(runDurationNanos))
+                + " of the run, across " + audit.gcPauseCount() + " GC pauses\n"));
+
+        // Overlap is judged on every bucket that lost time, not only on the named pauses: a
+        // bucket can collect 100ms of stall in forty short pauses and none of them would appear
+        // in the table above.
+        long contaminatedNanos = 0;
+        int contaminatedBuckets = 0;
+        for (var entry : audit.pausedNanosPerBucket().entrySet()) {
+            if (spikeBuckets.contains(entry.getKey())) {
+                contaminatedBuckets++;
+                contaminatedNanos += entry.getValue();
+            }
+        }
+        if (contaminatedBuckets > 0) {
+            out.append(Ansi.dim("  " + Numbers.latency(contaminatedNanos) + " of that falls in "
+                    + contaminatedBuckets + " bucket(s) reported as a storage spike above - that "
+                    + "latency was at least partly this process, not the target\n"));
         }
         return out.toString();
     }

@@ -92,11 +92,11 @@ final class SelfAuditTest {
 
     @Test
     void aCleanRunSaysSoRatherThanPrintingNothing() {
-        SelfAudit.Report clean = new SelfAudit.Report(true, null, Map.of(), List.of(), 0, 0);
+        SelfAudit.Report clean = new SelfAudit.Report(true, null, Map.of(), List.of(), 0, 0, 0, 0);
 
         String out = CliTables.selfAuditTable(clean, null, SECOND);
 
-        assertThat(out).contains("no JVM pause");
+        assertThat(out).contains("not paused at all");
         assertThat(out).contains("the target's, not this process's");
     }
 
@@ -109,7 +109,7 @@ final class SelfAuditTest {
         assertThat(out).contains("unavailable").contains("JFR is not enabled");
         assertThat(out)
                 .withFailMessage("an unreadable recording must not be presented as a clean run")
-                .doesNotContain("no JVM pause");
+                .doesNotContain("not paused at all");
     }
 
     @Test
@@ -117,7 +117,7 @@ final class SelfAuditTest {
         SelfAudit.Report report = new SelfAudit.Report(true, null,
                 Map.of(4, 340_000_000L),
                 List.of(new SelfAudit.Pause(4, 340_000_000L, "jdk.GCPhasePause")),
-                340_000_000L, 1);
+                340_000_000L, 1, 340_000_000L, 1);
 
         var spike = new SpikeCorrelator.Spike(4, 4 * SECOND, "db",
                 900_000_000L, 50_000_000L, true, SpikeCorrelator.Verdict.DB);
@@ -138,7 +138,7 @@ final class SelfAuditTest {
         SelfAudit.Report report = new SelfAudit.Report(true, null,
                 Map.of(9, 120_000_000L),
                 List.of(new SelfAudit.Pause(9, 120_000_000L, "jdk.GCPhasePause")),
-                120_000_000L, 1);
+                120_000_000L, 1, 120_000_000L, 1);
 
         var spike = new SpikeCorrelator.Spike(4, 4 * SECOND, "db",
                 900_000_000L, 50_000_000L, true, SpikeCorrelator.Verdict.DB);

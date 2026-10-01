@@ -70,19 +70,11 @@ final class SpikeCorrelatorTest {
     }
 
     @Test
-    void theAppBeingSlowerThanTheStoreNamesHttp() {
+    void theAppAddingTimeOfItsOwnComparableToTheStoresIsCalledEven() {
+        // 900ms against 500ms: the store accounts for 500 of the app's 900, leaving 400 of the
+        // app's own. Neither explains the spike by itself.
         CorrelationResult result = SpikeCorrelator.correlate(
                 List.of(bucket(0, 900 * MS)),
-                storage("db", List.of(bucket(0, 500 * MS))),
-                Thresholds.defaults());
-
-        assertThat(result.spikes().get(0).verdict()).isEqualTo(Verdict.HTTP);
-    }
-
-    @Test
-    void latenciesWithinMeasurementPrecisionAreCalledEven() {
-        CorrelationResult result = SpikeCorrelator.correlate(
-                List.of(bucket(0, 502 * MS)),
                 storage("db", List.of(bucket(0, 500 * MS))),
                 Thresholds.defaults());
 
@@ -90,10 +82,101 @@ final class SpikeCorrelatorTest {
     }
 
     @Test
-    void aGapWiderThanPrecisionIsNotCalledEven() {
-        assertThat(SpikeCorrelator.verdictFor("db", 530 * MS, 500 * MS)).isEqualTo(Verdict.HTTP);
+    void theAppDominatingTheStoreNamesHttp() {
+        // 1.5s against 300ms: four fifths of the app's time is its own.
+        CorrelationResult result = SpikeCorrelator.correlate(
+                List.of(bucket(0, 1500 * MS)),
+                storage("db", List.of(bucket(0, 300 * MS))),
+                Thresholds.defaults());
+
+        assertThat(result.spikes().get(0).verdict()).isEqualTo(Verdict.HTTP);
+    }
+
+    /**
+     * An endpoint that waits on the database is necessarily slower than the database, so being
+     * slower by a margin consistent with a request round trip is not evidence against the app.
+     * This used to be read as HTTP, which named the app for faults that were entirely the
+     * database's - confirmed against a real database in {@code SpikeCorrelationOracleTest}.
+     */
+    @Test
+    void theAppBeingSlowerOnlyByItsOwnOverheadStillNamesTheStore() {
+        CorrelationResult result = SpikeCorrelator.correlate(
+                List.of(bucket(0, 502 * MS)),
+                storage("db", List.of(bucket(0, 500 * MS))),
+                Thresholds.defaults());
+
+        assertThat(result.spikes().get(0).verdict()).isEqualTo(Verdict.DB);
+    }
+
+    @Test
+    void aSmallExcessOverTheStoreIsAttributedToTheStore() {
+        assertThat(SpikeCorrelator.verdictFor("db", 530 * MS, 500 * MS)).isEqualTo(Verdict.DB);
         assertThat(SpikeCorrelator.verdictFor("db", 500 * MS, 530 * MS)).isEqualTo(Verdict.DB);
         assertThat(SpikeCorrelator.verdictFor("redis", 500 * MS, 530 * MS)).isEqualTo(Verdict.REDIS);
+        assertThat(SpikeCorrelator.verdictFor("redis", 530 * MS, 500 * MS)).isEqualTo(Verdict.REDIS);
+    }
+
+    @Test
+    void aBaselineSeparatesAnAppsFixedCostFromTheSpike() {
+        // An endpoint that always costs 200ms of its own, hit by a database that jumps from 2ms
+        // to 300ms. Compared directly, 500ms against 300ms looks like the app. Compared as
+        // growth, 300ms against 298ms is the database and nothing else.
+        assertThat(SpikeCorrelator.verdictFor("db", 500 * MS, 300 * MS, 200 * MS, 2 * MS))
+                .isEqualTo(Verdict.DB);
+    }
+
+    @Test
+    void aStoreAtItsBaselineIsNotBlamedForTheAppsSpike() {
+        assertThat(SpikeCorrelator.verdictFor("db", 800 * MS, 5 * MS, 10 * MS, 5 * MS))
+                .isEqualTo(Verdict.HTTP);
+    }
+
+    @Test
+    void spikingBucketsCannotDragTheBaselineUp() {
+        // Three quiet buckets around 10ms and two spiking: the lower quartile stays with the
+        // quiet ones even though the spikes are 40% of the run.
+        List<com.lockstep.stats.Bucket> buckets = List.of(
+                bucket(0, 10 * MS), bucket(1, 12 * MS), bucket(2, 11 * MS),
+                bucket(3, 900 * MS), bucket(4, 950 * MS));
+
+        assertThat(SpikeCorrelator.baselineOf(buckets, 0)).isEqualTo(11 * MS);
+    }
+
+    @Test
+    void aFaultCoveringMostOfTheRunStillLeavesTheBaselineWithTheQuietBuckets() {
+        // Eight of eleven buckets elevated: the median would sit inside the fault.
+        List<com.lockstep.stats.Bucket> buckets = new java.util.ArrayList<>();
+        buckets.add(bucket(0, 20 * MS));
+        buckets.add(bucket(1, 22 * MS));
+        buckets.add(bucket(2, 21 * MS));
+        for (int i = 3; i < 11; i++) {
+            buckets.add(bucket(i, 800 * MS));
+        }
+
+        assertThat(SpikeCorrelator.baselineOf(buckets, 0))
+                .withFailMessage("the baseline must come from the quiet buckets, not the fault")
+                .isLessThanOrEqualTo(25 * MS);
+    }
+
+    @Test
+    void anEmptyBucketHasNoP99AndIsNotPartOfTheBaseline() {
+        List<com.lockstep.stats.Bucket> buckets = new java.util.ArrayList<>(List.of(
+                bucket(0, 40 * MS), bucket(1, 60 * MS)));
+        buckets.add(com.lockstep.stats.Bucket.empty(2, SECOND));
+
+        assertThat(SpikeCorrelator.baselineOf(buckets, 0))
+                .withFailMessage("an empty bucket counted as 0ms would drag the baseline to zero")
+                .isEqualTo(40 * MS);
+    }
+
+    @Test
+    void aWarmupBucketIsNotPartOfTheBaseline() {
+        List<com.lockstep.stats.Bucket> buckets = List.of(
+                bucket(0, 500 * MS), bucket(1, 20 * MS), bucket(2, 22 * MS));
+
+        assertThat(SpikeCorrelator.baselineOf(buckets, SECOND))
+                .withFailMessage("a cold first bucket must not set the baseline for the rest")
+                .isEqualTo(20 * MS);
     }
 
     @Test
@@ -214,6 +297,8 @@ final class SpikeCorrelatorTest {
         Spike spike = correlation.spikes().get(0);
         assertThat(spike.bucketIndex()).isEqualTo(2);
         assertThat(spike.masked()).isFalse();
-        assertThat(spike.verdict()).isEqualTo(Verdict.HTTP);
+        // The app rose 685ms over its 15ms baseline while the database rose 645ms over its 5ms
+        // one. The database accounts for 94% of the app's rise, so it is the database.
+        assertThat(spike.verdict()).isEqualTo(Verdict.DB);
     }
 }

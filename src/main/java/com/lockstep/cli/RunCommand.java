@@ -383,7 +383,7 @@ public final class RunCommand implements Callable<Integer> {
             }
         }
         String selfAuditOut = CliTables.selfAuditTable(auditReport, correlation,
-                result.context().bucketWidthNanos());
+                result.context().bucketWidthNanos(), result.context().durationNanos());
         if (!selfAuditOut.isEmpty()) {
             out.println();
             out.print(selfAuditOut);

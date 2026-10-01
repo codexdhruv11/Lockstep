@@ -18,6 +18,9 @@ public final class SelfAudit implements AutoCloseable {
 
     public static final long SIGNIFICANT_PAUSE_NANOS = 10_000_000L;
 
+    /** How many individual pauses the report names. The total counts all of them regardless. */
+    private static final int LONGEST_PAUSES_LISTED = 10;
+
     private static final String[] PAUSE_EVENTS = {
         "jdk.GCPhasePause",
         "jdk.SafepointBegin",
@@ -82,10 +85,23 @@ public final class SelfAudit implements AutoCloseable {
         }
     }
 
+    /**
+     * Sums every pause the recording holds, and only then applies the threshold to decide which
+     * ones are worth naming individually.
+     *
+     * <p>The threshold used to be applied first, which made the total wrong in the one case that
+     * matters most. A generator doing steady allocation produces a long tail of young-collection
+     * pauses of two to nine milliseconds; measured against the GC MXBean, 43 of them came to
+     * 120ms of real stall in a four-second run, and every one fell under the 10ms threshold. The
+     * report then said "no JVM pause above 10ms; the latencies above are the target's, not this
+     * process's" - an affirmative clean bill of health for a process that had been stopped for 3%
+     * of the run. Frequent small pauses are exactly what moves a p99, so they are now counted.
+     */
     private Report analyse() throws IOException {
         Map<Integer, Long> pausedNanosPerBucket = new LinkedHashMap<>();
-        List<Pause> longest = new ArrayList<>();
+        List<Pause> significant = new ArrayList<>();
         long totalPausedNanos = 0;
+        long gcPausedNanos = 0;
         long gcPauses = 0;
 
         try (RecordingFile file = new RecordingFile(dumpTo)) {
@@ -100,9 +116,6 @@ public final class SelfAudit implements AutoCloseable {
                     continue;
                 }
                 long nanos = duration.toNanos();
-                if (nanos < thresholdNanos) {
-                    continue;
-                }
                 int bucket = bucketFor(event.getStartTime());
                 if (bucket < 0) {
                     continue;
@@ -111,17 +124,21 @@ public final class SelfAudit implements AutoCloseable {
                 totalPausedNanos += nanos;
                 if (name.equals("jdk.GCPhasePause")) {
                     gcPauses++;
+                    gcPausedNanos += nanos;
                 }
-                longest.add(new Pause(bucket, nanos, name));
+                if (nanos >= thresholdNanos) {
+                    significant.add(new Pause(bucket, nanos, name));
+                }
             }
         }
 
-        longest.sort((a, b) -> Long.compare(b.durationNanos(), a.durationNanos()));
-        if (longest.size() > 10) {
-            longest = new ArrayList<>(longest.subList(0, 10));
+        int significantCount = significant.size();
+        significant.sort((a, b) -> Long.compare(b.durationNanos(), a.durationNanos()));
+        if (significant.size() > LONGEST_PAUSES_LISTED) {
+            significant = new ArrayList<>(significant.subList(0, LONGEST_PAUSES_LISTED));
         }
-        return new Report(true, null, pausedNanosPerBucket, List.copyOf(longest),
-                totalPausedNanos, gcPauses);
+        return new Report(true, null, pausedNanosPerBucket, List.copyOf(significant),
+                totalPausedNanos, gcPauses, gcPausedNanos, significantCount);
     }
 
     private static boolean isPauseEvent(String name) {
@@ -167,7 +184,9 @@ public final class SelfAudit implements AutoCloseable {
             Map<Integer, Long> pausedNanosPerBucket,
             List<Pause> longestPauses,
             long totalPausedNanos,
-            long gcPauseCount) {
+            long gcPauseCount,
+            long gcPausedNanos,
+            int significantPauseCount) {
 
         public Report {
             pausedNanosPerBucket = pausedNanosPerBucket == null
@@ -177,7 +196,7 @@ public final class SelfAudit implements AutoCloseable {
         }
 
         public static Report unavailable(String reason) {
-            return new Report(false, reason, Map.of(), List.of(), 0, 0);
+            return new Report(false, reason, Map.of(), List.of(), 0, 0, 0, 0);
         }
 
         public long pausedNanosIn(int bucketIndex) {
@@ -185,7 +204,21 @@ public final class SelfAudit implements AutoCloseable {
         }
 
         public boolean hasPauses() {
-            return !pausedNanosPerBucket.isEmpty();
+            return totalPausedNanos > 0;
+        }
+
+        /**
+         * Whether any single pause was long enough to name. False with {@link #hasPauses()} true
+         * means the stall was spread over many short pauses, which the report has to say
+         * differently - there is no row to point at, but the time was still lost.
+         */
+        public boolean hasSignificantPauses() {
+            return !longestPauses.isEmpty();
+        }
+
+        /** What share of the run this process spent stopped. */
+        public double pausedFractionOf(long runDurationNanos) {
+            return runDurationNanos <= 0 ? 0 : (double) totalPausedNanos / runDurationNanos;
         }
     }
 }
