@@ -313,6 +313,113 @@ final class SurveyOracleTest {
         }
     }
 
+    /**
+     * The endpoint ranking, which was the one part of the survey with no coverage at all.
+     *
+     * <p>Pairing a {@code _count} sample with its {@code _sum} sample by matching {@code uri} and
+     * {@code method} labels is exactly the sort of code that silently returns nothing or pairs the
+     * wrong rows, and neither failure looks like a failure.
+     */
+    @Test
+    void endpointsAreRankedByTotalTimeFromTheTargetsOwnMetrics() throws Exception {
+        assumeTrue(DockerClientFactory.instance().isDockerAvailable(), "Docker unavailable");
+
+        // Three endpoints. /slow is called least and costs most; /chatty is called most and costs
+        // least. Ranking by count or by mean would pick the wrong one in opposite directions.
+        String payload = """
+                # TYPE http_server_requests_seconds summary
+                http_server_requests_seconds_count{method="GET",uri="/api/slow",status="200"} 1000.0
+                http_server_requests_seconds_sum{method="GET",uri="/api/slow",status="200"} 400.0
+                http_server_requests_seconds_count{method="GET",uri="/api/chatty",status="200"} 900000.0
+                http_server_requests_seconds_sum{method="GET",uri="/api/chatty",status="200"} 90.0
+                http_server_requests_seconds_count{method="POST",uri="/api/write",status="201"} 5000.0
+                http_server_requests_seconds_sum{method="POST",uri="/api/write",status="201"} 150.0
+                """;
+
+        var server = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress(0), 0);
+        server.setExecutor(java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor());
+        server.createContext("/metrics", exchange -> {
+            byte[] body = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            try (var out = exchange.getResponseBody()) {
+                out.write(body);
+            }
+        });
+        server.start();
+
+        try (PostgreSQLContainer<?> pg = postgres()) {
+            pg.start();
+            try (Connection connection = DriverManager.getConnection(
+                        pg.getJdbcUrl(), pg.getUsername(), pg.getPassword());
+                    Statement statement = connection.createStatement()) {
+                statement.execute("CREATE EXTENSION pg_stat_statements");
+            }
+
+            Survey survey;
+            try (SurveyProbe probe = SurveyProbe.open(conn(pg), "postgres")) {
+                survey = probe.read("http://localhost:" + server.getAddress().getPort()
+                        + "/metrics");
+            }
+
+            var ranked = survey.endpointsByTotalTime(5);
+            var slow = ranked.isEmpty() ? null : ranked.get(0);
+            var chatty = survey.endpoints().stream()
+                    .filter(e -> e.uri().equals("/api/chatty")).findFirst().orElse(null);
+
+            record("endpoints found", 3, survey.endpoints().size(),
+                    survey.endpoints().size() == 3);
+            record("ranked first", "GET /api/slow",
+                    slow == null ? "none" : slow.label(),
+                    slow != null && slow.label().equals("GET /api/slow"));
+            record("/api/slow total", "400s",
+                    slow == null ? "-" : "%.0fs".formatted(slow.totalSeconds()),
+                    slow != null && Math.abs(slow.totalSeconds() - 400) < 0.5);
+            record("/api/slow mean", "400ms",
+                    slow == null ? "-" : "%.0fms".formatted(slow.meanMillis()),
+                    slow != null && Math.abs(slow.meanMillis() - 400) < 1);
+            record("/api/chatty called most", "900,000",
+                    chatty == null ? "-" : chatty.count(),
+                    chatty != null && chatty.count() == 900_000);
+            record("/api/chatty mean", "0.1ms",
+                    chatty == null ? "-" : "%.1fms".formatted(chatty.meanMillis()),
+                    chatty != null && Math.abs(chatty.meanMillis() - 0.1) < 0.01);
+            record("method labels kept", "POST on /api/write",
+                    survey.endpoints().stream()
+                            .filter(e -> e.uri().equals("/api/write"))
+                            .map(Survey.Endpoint::label).findFirst().orElse("none"),
+                    survey.endpoints().stream()
+                            .anyMatch(e -> "POST /api/write".equals(e.label())));
+            printLedger("endpoint ranking from the target's metrics");
+
+            assertThat(survey.endpoints())
+                    .withFailMessage("three endpoints were exposed; pairing count with sum by "
+                            + "label is where this silently returns nothing")
+                    .hasSize(3);
+            assertThat(slow).isNotNull();
+            assertThat(slow.label())
+                    .withFailMessage("""
+                            /api/slow is called 1,000 times for 400s, /api/chatty 900,000 times \
+                            for 90s. Ranking by count puts chatty first and ranking by mean also \
+                            puts slow first but for the wrong reason — total time is the ranking \
+                            that finds what the server actually spends its time on. Got: %s""",
+                            ranked.stream().map(Survey.Endpoint::label).toList())
+                    .isEqualTo("GET /api/slow");
+            assertThat(slow.totalSeconds()).isCloseTo(400,
+                    org.assertj.core.data.Offset.offset(0.5));
+            assertThat(slow.meanMillis())
+                    .withFailMessage("400s over 1,000 calls is a 400ms mean")
+                    .isCloseTo(400, org.assertj.core.data.Offset.offset(1.0));
+            assertThat(chatty).isNotNull();
+            assertThat(chatty.meanMillis())
+                    .withFailMessage("90s over 900,000 calls is 0.1ms — mis-pairing the sum with "
+                            + "another endpoint's would show this as hundreds of ms")
+                    .isCloseTo(0.1, org.assertj.core.data.Offset.offset(0.01));
+        } finally {
+            server.stop(0);
+        }
+    }
+
     @Test
     void aNonPostgresTargetIsRefused() {
         assertThat(org.assertj.core.api.Assertions.catchThrowable(
