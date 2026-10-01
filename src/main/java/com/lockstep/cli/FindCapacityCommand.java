@@ -152,7 +152,8 @@ public final class FindCapacityCommand implements Callable<Integer> {
             }
         }
         return new CapacitySearch.Measurement(requested, achieved, Math.max(0, worstP99),
-                scheduled, executed, worstRunner == null ? "-" : worstRunner);
+                scheduled, executed, worstRunner == null ? "-" : worstRunner,
+                scaled.duration());
     }
 
     static String formatRate(double perSecond) {

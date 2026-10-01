@@ -17,15 +17,52 @@ public final class CapacitySearch {
 
     private CapacitySearch() {}
 
+    /**
+     * How much of a step's own duration the p99 may occupy before the step is too short to have
+     * observed anything. A step only shows steady state if work issued at its start finishes
+     * inside it; once the p99 approaches the step length, most of what the step scheduled
+     * completes during the drain afterwards and is counted as delivered anyway, so the step
+     * reports full delivery for a rate it never actually sustained.
+     *
+     * <p>Measured on a real target: an endpoint whose true sustainable rate was 6/s reported
+     * "sustains 21/s" with the default 10s step, because its p99 was over 30 seconds. A third of
+     * the step is the point past which that distortion is large enough to refuse to report.
+     */
+    static final double STEP_P99_FRACTION = 1.0 / 3;
+
+    /** How much longer than the p99 a step should be for its numbers to mean anything. */
+    static final int RECOMMENDED_STEP_MULTIPLE = 10;
+
     public record Measurement(
             double requestedRatePerSecond,
             double achievedRatePerSecond,
             long p99Nanos,
             long scheduledCount,
             long executedCount,
-            String runnerName) {
+            String runnerName,
+            long stepDurationNanos) {
+
+        public Measurement(double requestedRatePerSecond, double achievedRatePerSecond,
+                long p99Nanos, long scheduledCount, long executedCount, String runnerName) {
+            this(requestedRatePerSecond, achievedRatePerSecond, p99Nanos, scheduledCount,
+                    executedCount, runnerName, 0);
+        }
+
         public double deliveryRatio() {
             return scheduledCount <= 0 ? 1.0 : (double) executedCount / scheduledCount;
+        }
+
+        /**
+         * Whether this step was too short for its own result to mean anything. Zero step duration
+         * means the caller did not supply one, in which case nothing can be said.
+         */
+        public boolean stepTooShort() {
+            return stepDurationNanos > 0 && p99Nanos > stepDurationNanos * STEP_P99_FRACTION;
+        }
+
+        /** The step length this measurement's own p99 calls for. */
+        public long recommendedStepNanos() {
+            return p99Nanos * RECOMMENDED_STEP_MULTIPLE;
         }
     }
 
@@ -56,6 +93,25 @@ public final class CapacitySearch {
 
         public boolean bracketed() {
             return sustained != null && strained != null;
+        }
+
+        /**
+         * Whether the step was too short for the reported figures to be trusted. True when the
+         * step the search believed was sustained had a p99 large enough to have spilled past the
+         * step's own end - the case that produced "sustains 21/s" for a target whose real answer
+         * was 6/s.
+         */
+        public boolean stepTooShort() {
+            // Only the step that was declared SUSTAINED matters. A strained step is supposed to
+            // have a latency past the step - that is the strain being detected, not a broken
+            // measurement - so including it would make this fire on every healthy run that found
+            // a limit, which is every useful run.
+            return sustained != null && sustained.measurement().stepTooShort();
+        }
+
+        /** The step length the sustained observation's own latency calls for. */
+        public long recommendedStepNanos() {
+            return sustained == null ? 0 : sustained.measurement().recommendedStepNanos();
         }
     }
 

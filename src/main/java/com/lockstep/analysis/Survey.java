@@ -32,7 +32,21 @@ public record Survey(
         List<Statement> statements,
         List<Relation> relations,
         List<Index> indexes,
-        List<Endpoint> endpoints) {
+        List<Endpoint> endpoints,
+        String endpointsUnavailableReason) {
+
+    /**
+     * Keeps the older eleven-argument shape working. A null reason means nothing was attempted,
+     * which is different from an attempt that failed.
+     */
+    public Survey(boolean available, String unavailableReason, String database,
+            String countersSince, long countersAgeDays, boolean statementsAvailable,
+            String statementsUnavailableReason, List<Statement> statements,
+            List<Relation> relations, List<Index> indexes, List<Endpoint> endpoints) {
+        this(available, unavailableReason, database, countersSince, countersAgeDays,
+                statementsAvailable, statementsUnavailableReason, statements, relations, indexes,
+                endpoints, null);
+    }
 
     /** A table this large that is scanned sequentially is worth an index. */
     public static final long LARGE_TABLE_BYTES = 8L * 1024 * 1024;

@@ -60,7 +60,8 @@ public final class HttpRunner implements Runner {
         List<String> methods = new ArrayList<>(targets.size());
         List<String> urls = new ArrayList<>(targets.size());
         for (HttpConfig.Target target : targets) {
-            endpoints.add(new Endpoint(templateFor(target), target.weight()));
+            endpoints.add(new Endpoint(templateFor(target), target.weight(),
+                    needsRendering(target) ? target : null));
             methods.add(target.method());
             urls.add(target.url());
         }
@@ -69,12 +70,25 @@ public final class HttpRunner implements Runner {
                 QueryLabels.forTargets(methods, urls), config.rate(), trace);
     }
 
-    private record Endpoint(HttpRequest.Builder request, int weight) {}
+    /**
+     * {@code templated} is null for the ordinary case, where one pre-built request is reused for
+     * every call. It holds the target only when a placeholder means the request has to be rebuilt
+     * each time, so the common path keeps costing nothing.
+     */
+    private record Endpoint(HttpRequest.Builder request, int weight, HttpConfig.Target templated) {}
+
+    private static boolean needsRendering(HttpConfig.Target target) {
+        return RequestTemplate.isTemplated(target.body())
+                || RequestTemplate.isTemplated(target.url());
+    }
 
     private static HttpRequest.Builder templateFor(HttpConfig.Target target) {
         URI uri;
+        // A placeholder is not a legal URI character, so validate a rendered sample rather than
+        // the raw template - otherwise a perfectly good templated URL is rejected at startup.
+        String url = needsRendering(target) ? RequestTemplate.render(target.url(), 1) : target.url();
         try {
-            uri = URI.create(target.url());
+            uri = URI.create(url);
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("http target url is not a valid URI: " + target.url(), e);
         }
@@ -111,13 +125,20 @@ public final class HttpRunner implements Runner {
         return "http";
     }
 
+    private final java.util.concurrent.atomic.AtomicLong sequence =
+            new java.util.concurrent.atomic.AtomicLong();
+
     private Operation.Outcome executeOne(long scheduledOffsetNanos) {
         int index = endpoints.pickIndex();
         long startedAt = System.nanoTime();
         Operation.Outcome outcome = Operation.Outcome.OK;
         String traceparent = trace ? TraceContext.newHeader() : null;
         try {
-            outcome = send(endpoints.items().get(index).request(), traceparent)
+            Endpoint endpoint = endpoints.items().get(index);
+            HttpRequest.Builder request = endpoint.templated() == null
+                    ? endpoint.request()
+                    : renderedFor(endpoint.templated(), sequence.incrementAndGet());
+            outcome = send(request, traceparent)
                     .withTraceId(TraceContext.traceIdOf(traceparent));
             return outcome;
         } finally {
@@ -191,6 +212,25 @@ public final class HttpRunner implements Runner {
     private static String methodOf(HttpConfig.Target target) {
         String method = target.method() == null || target.method().isBlank() ? "GET" : target.method().trim();
         return method.toUpperCase();
+    }
+
+    /**
+     * Builds one request with this call's own placeholder values. Only reached for a target that
+     * carries a placeholder, so the per-request URI parse and body copy are paid only where they
+     * buy something.
+     */
+    private static HttpRequest.Builder renderedFor(HttpConfig.Target target, long sequence) {
+        String url = RequestTemplate.render(target.url(), sequence);
+        String body = RequestTemplate.render(target.body(), sequence);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+                .timeout(REQUEST_TIMEOUT);
+        applyHeaders(builder, target.header());
+        builder.method(target.method() == null ? "GET" : target.method().toUpperCase(
+                        java.util.Locale.ROOT),
+                body == null || body.isEmpty()
+                        ? HttpRequest.BodyPublishers.noBody()
+                        : HttpRequest.BodyPublishers.ofString(body));
+        return builder;
     }
 
     private static HttpRequest.BodyPublisher bodyOf(HttpConfig.Target target) {

@@ -140,9 +140,10 @@ public final class SurveyProbe implements AutoCloseable {
                         + "useful part of this — cannot be produced.";
             }
 
+            Endpoints endpoints = readEndpoints(metricsUrl);
             return new Survey(true, null, database, since, ageDays,
                     statementsAvailable, statementsProblem, statements,
-                    readRelations(), readIndexes(), readEndpoints(metricsUrl));
+                    readRelations(), readIndexes(), endpoints.endpoints(), endpoints.problem());
         } catch (Exception e) {
             return Survey.unavailable(database,
                     "could not read the statistics views: " + describe(e));
@@ -204,16 +205,26 @@ public final class SurveyProbe implements AutoCloseable {
     }
 
     /** Endpoints from the target's metrics endpoint, if one was given. */
-    private List<Survey.Endpoint> readEndpoints(String metricsUrl) {
+    /** Endpoints plus, when there are none, the reason - which used to be dropped. */
+    record Endpoints(List<Survey.Endpoint> endpoints, String problem) {}
+
+    private Endpoints readEndpoints(String metricsUrl) {
         if (metricsUrl == null) {
-            return List.of();
+            return new Endpoints(List.of(), null);   // nothing attempted, nothing to explain
         }
         try (HttpClient client = HttpClient.newBuilder().connectTimeout(HTTP_TIMEOUT).build()) {
             HttpResponse<String> response = client.send(
                     HttpRequest.newBuilder(URI.create(metricsUrl)).timeout(HTTP_TIMEOUT).GET().build(),
                     HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                return List.of();
+                // Used to return an empty list, so the endpoint ranking simply did not appear
+                // and the reader had no way to know a scrape had been attempted at all. A 403
+                // here is the common case: the metrics path needs a header the scrape did not
+                // send.
+                return new Endpoints(List.of(), "the metrics endpoint answered HTTP "
+                        + response.statusCode() + " (" + metricsUrl + ")"
+                        + (response.statusCode() == 401 || response.statusCode() == 403
+                            ? " — it needs credentials this scrape did not send" : ""));
             }
             PrometheusScrape scrape = PrometheusScrape.parse(response.body());
             String countName = scrape.firstPresent(
@@ -221,7 +232,9 @@ public final class SurveyProbe implements AutoCloseable {
             String sumName = scrape.firstPresent(
                     TargetMetrics.REQUEST_SECONDS_NAMES.toArray(String[]::new));
             if (countName == null) {
-                return List.of();
+                return new Endpoints(List.of(), "the metrics endpoint returned no recognised "
+                        + "request-count metric. Looked for: "
+                        + String.join(", ", TargetMetrics.REQUEST_COUNT_NAMES));
             }
 
             // Pair count and sum by their uri/method labels, so each endpoint gets both.
@@ -249,9 +262,11 @@ public final class SurveyProbe implements AutoCloseable {
                 }
                 endpoints.add(new Survey.Endpoint(uri, method, (long) count.value(), seconds));
             }
-            return endpoints;
+            return new Endpoints(endpoints, endpoints.isEmpty()
+                    ? "the metric " + countName + " carried no uri, http_route or path label, so "
+                      + "its samples cannot be attributed to endpoints" : null);
         } catch (Exception e) {
-            return List.of();
+            return new Endpoints(List.of(), "could not scrape " + metricsUrl + ": " + describe(e));
         }
     }
 

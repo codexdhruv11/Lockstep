@@ -336,6 +336,19 @@ public final class CliTables {
             com.lockstep.analysis.CapacitySearch.Result result, Map<String, Integer> baseRates,
             int concurrency) {
         StringBuilder out = new StringBuilder();
+        // A step shorter than the latency it is measuring reports a rate it never sustained, so
+        // say that before the number rather than after it. Measured on a real target: a 10s step
+        // reported "sustains 21/s" where a 60s step reported 6/s.
+        if (result.stepTooShort()) {
+            out.append(Ansi.error(
+                    "capacity NOT reportable: the step was shorter than the latency it measured\n"));
+            out.append(Ansi.dim(
+                    "  requests issued inside a step did not finish inside it — they completed "
+                    + "during the drain\n  and were counted as delivered, so a rate looks "
+                    + "sustained that never was.\n  re-run with --step "
+                    + com.lockstep.util.Durations.formatNanos(result.recommendedStepNanos())
+                    + " or longer. The figures below are the search's own and are too high.\n"));
+        }
         if (result.bracketed()) {
             var held = result.sustained();
             var gave = result.strained();
@@ -674,6 +687,11 @@ public final class CliTables {
             out.append('\n').append("endpoints by total time\n").append(render(rows));
             out.append(Ansi.dim("  tagged by URI template, so every id collapses into one row — "
                     + "a single slow row cannot be distinguished here\n"));
+        } else if (survey.endpointsUnavailableReason() != null) {
+            // An attempted scrape that produced nothing used to print no section at all, which
+            // reads as "there is nothing to say about endpoints" rather than "the scrape failed".
+            out.append('\n').append("endpoints by total time\n");
+            out.append(Ansi.dim("  unavailable: " + survey.endpointsUnavailableReason() + "\n"));
         }
 
         out.append('\n').append(nextSteps(survey));

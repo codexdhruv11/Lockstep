@@ -44,10 +44,20 @@ public final class ConfigLoader {
         return config;
     }
 
+    /**
+     * SnakeYAML defaults to a 3MB code-point limit, which exists to stop a hostile document from
+     * exhausting memory. A config file is written by the person running the tool, not received
+     * from one, so the guard protects nothing here and the ceiling is real: a multi-target config
+     * with a bearer token per target reaches 3MB at a few thousand targets, and the parser then
+     * reported "is not valid YAML" for a document that was perfectly valid and merely large.
+     */
+    private static final int CODE_POINT_LIMIT = 64 * 1024 * 1024;
+
     private static Map<String, Object> parse(String yaml, String sourceName) {
         try {
             LoaderOptions options = new LoaderOptions();
             options.setAllowDuplicateKeys(false);
+            options.setCodePointLimit(CODE_POINT_LIMIT);
             Yaml yamlParser = new Yaml(options);
             Object document = yamlParser.load(yaml);
             if (!(document instanceof Map)) {
@@ -58,7 +68,17 @@ public final class ConfigLoader {
             Map<String, Object> root = (Map<String, Object>) document;
             return root;
         } catch (org.yaml.snakeyaml.error.YAMLException e) {
-            throw new ConfigValidationException("config \"" + sourceName + "\" is not valid YAML: " + e.getMessage());
+            // "exceeds the limit" is a size refusal, not a syntax error. Reporting it as invalid
+            // syntax sends the reader looking for a typo in a file that has none - and if the
+            // file is JSON, as a generated multi-target config usually is, "not valid YAML" is
+            // doubly misleading, since YAML is a superset of JSON and it parsed fine.
+            String message = e.getMessage() == null ? "" : e.getMessage();
+            if (message.contains("exceeds the limit")) {
+                throw new ConfigValidationException("config \"" + sourceName + "\" is larger than "
+                        + "the parser will accept (" + CODE_POINT_LIMIT / (1024 * 1024)
+                        + "MB). The document is not malformed, only large: " + message);
+            }
+            throw new ConfigValidationException("config \"" + sourceName + "\" is not valid YAML: " + message);
         }
     }
 

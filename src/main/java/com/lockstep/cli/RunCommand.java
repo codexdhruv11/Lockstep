@@ -484,8 +484,12 @@ public final class RunCommand implements Callable<Integer> {
         }
         if (breakdowns.isEmpty()) {
             return CliTables.traceBreakdownSection(null,
-                    "no spans came back for those IDs. Either the target is not instrumented, its "
-                    + "exporter is not pointed at this backend, or it supports "
+                    "no spans came back for those IDs after "
+                    + com.lockstep.runner.TraceFetcher.describeWindow()
+                    + ". The most common cause is the target's exporter still holding them: the "
+                    + "OpenTelemetry SDK batches for up to 5s by default, and a long one can be "
+                    + "set with OTEL_BSP_SCHEDULE_DELAY. Otherwise the target is not instrumented, "
+                    + "its exporter is not pointed at this backend, or it supports "
                     + com.lockstep.runner.TraceFetcher.describeSupport());
         }
         return CliTables.traceBreakdownSection(breakdowns, null);

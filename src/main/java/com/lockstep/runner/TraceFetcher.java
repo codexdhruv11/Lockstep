@@ -33,8 +33,17 @@ public final class TraceFetcher implements AutoCloseable {
     /** Jaeger reports microseconds; everything in Lockstep is nanoseconds. */
     private static final long MICROS_TO_NANOS = 1_000L;
 
-    private static final int ATTEMPTS = 5;
-    private static final long RETRY_MILLIS = 700;
+    /**
+     * The fetch window has to outlast the target exporter's batching, not just the backend's
+     * ingest. The OpenTelemetry SDK's BatchSpanProcessor holds spans for up to 5 seconds by
+     * default (OTEL_BSP_SCHEDULE_DELAY), so a span from the last moment of a run is not even sent
+     * until after that. These were 5 attempts 700ms apart - a window of under 4 seconds, which
+     * expired before the agent had exported anything. Measured against a real OpenTelemetry Java
+     * agent: the trace was in Jaeger and queryable, and this gave up before asking for the last
+     * time. Not a flaky miss - a certain one, for any target on the SDK defaults.
+     */
+    private static final int ATTEMPTS = 12;
+    private static final long RETRY_MILLIS = 1_200;
 
     private final HttpClient client;
     private final String baseUrl;
@@ -60,6 +69,11 @@ public final class TraceFetcher implements AutoCloseable {
                 ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         return new TraceFetcher(
                 HttpClient.newBuilder().connectTimeout(TIMEOUT).build(), trimmed);
+    }
+
+    /** How long {@link #fetch} keeps asking, so a failure message can state it. */
+    public static String describeWindow() {
+        return "%.0fs of retries".formatted((ATTEMPTS - 1) * RETRY_MILLIS / 1000.0);
     }
 
     public static String describeSupport() {
