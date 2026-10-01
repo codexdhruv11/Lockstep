@@ -137,8 +137,9 @@ And one that answers a question nothing else here can:
 
   That is the distinction client-side measurement cannot make in principle: whether the time went
   to a query, to middleware, or to serialisation. Off by default, because the header is sampled
-  and most trace backends bill per span. See [`otel/README.md`](otel/README.md) for a trace
-  backend in one command and what instrumenting a target costs per language.
+  and most trace backends bill per span. `otel/compose.yml` brings up a trace backend in one
+  command: `docker compose -f otel/compose.yml up -d`, then point the target's exporter at
+  `http://localhost:4318` and open Jaeger on `http://localhost:16686`.
 
 - `--otlp http://localhost:4318/v1/metrics` sends the run's results to a collector, so a load test
   lands in the same dashboard as the traffic it is meant to resemble.
@@ -250,6 +251,31 @@ t2 POST /api/orders   118    11.0%  0    21.1ms  8.8ms  53.7ms  56.6ms
 
 `target:` (one endpoint) still works exactly as before, so an existing single-target config keeps
 working unchanged.
+
+### A value per request
+
+A write path is usually guarded by a unique constraint, and every request carrying the same body
+means the first one succeeds and the rest conflict. Three placeholders are substituted per
+request, in the body or the URL:
+
+```yaml
+http:
+  rate: 20
+  target:
+    method: POST
+    url: http://localhost:8080/api/orders
+    body: '{"ref":"{{uuid}}","placed_at":"{{now}}","n":{{seq}}}'
+```
+
+| | |
+|---|---|
+| `{{seq}}` | a counter from 1, one value per request — use it when two fields must match |
+| `{{uuid}}` | a fresh random UUID; two in one body differ |
+| `{{now}}` | the current instant, ISO-8601 UTC |
+
+`{{now}}` is a clock, not a counter, so where uniqueness has to hold rather than merely be
+likely, use `{{seq}}` or `{{uuid}}`. There is no arithmetic and no formatting: a config should
+be readable at face value.
 
 ### Per-query breakdown
 
