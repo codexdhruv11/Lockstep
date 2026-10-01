@@ -72,6 +72,20 @@ public final class CliTables {
                 parts.add(Numbers.withSeparators(loop.expectedHits() - loop.scheduledCount())
                         + " never scheduled");
             }
+            if (loop.drainDominated(result.context().durationNanos())
+                    && loop.goodputPerSecond() > 0) {
+                // The RATE column divides by the configured duration. When the target could not
+                // keep up, the queue drained after the window closed and that column reports
+                // what was offered rather than what the target managed.
+                parts.add(("the run took %s of wall clock, so the %s above is the offered rate — "
+                        + "the target completed %s")
+                        .formatted(
+                                com.lockstep.util.Durations.formatNanos(loop.elapsedNanos()),
+                                Numbers.rate(loop.series()
+                                        .summarize(name, result.context().durationNanos())
+                                        .achievedRatePerSecond()),
+                                Numbers.rate(loop.goodputPerSecond())));
+            }
 
             notes.append(Ansi.accent("! " + name)).append("  ")
                     .append(Numbers.withSeparators(loop.executedCount())).append(" of ")

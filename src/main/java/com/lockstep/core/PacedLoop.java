@@ -49,6 +49,7 @@ public final class PacedLoop {
         long scheduledCount = 0;
         long latenessTolerance = latenessToleranceNanos(ratePerSecond);
 
+        long startedAtNanoTime = System.nanoTime();
         ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
         try {
             for (int i = 0; i < workerCount; i++) {
@@ -87,14 +88,14 @@ public final class PacedLoop {
             return new LoopResult(recorder.snapshot(), scheduledCount, shed.sum(), abandoned,
                     lateFires.sum(), maxLatenessNanos.get(),
                     pacer.expectedHits(context.durationNanos()), drained, errors.snapshot(),
-                    slowest.snapshot());
+                    slowest.snapshot(), System.nanoTime() - startedAtNanoTime);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             workers.shutdownNow();
             return new LoopResult(recorder.snapshot(), scheduledCount, shed.sum(), inFlight.sum(),
                     lateFires.sum(), maxLatenessNanos.get(),
                     pacer.expectedHits(context.durationNanos()), false, errors.snapshot(),
-                    slowest.snapshot());
+                    slowest.snapshot(), System.nanoTime() - startedAtNanoTime);
         }
     }
 
@@ -178,7 +179,8 @@ public final class PacedLoop {
             long expectedHits,
             boolean drainedCleanly,
             java.util.Map<String, Long> errorCounts,
-            java.util.List<SlowestRequests.Entry> slowestRequests) {
+            java.util.List<SlowestRequests.Entry> slowestRequests,
+            long elapsedNanos) {
         public LoopResult {
             errorCounts = errorCounts == null
                     ? java.util.Map.of()
@@ -191,18 +193,44 @@ public final class PacedLoop {
                 long abandonedCount, long lateFireCount, long maxLatenessNanos, long expectedHits,
                 boolean drainedCleanly) {
             this(series, scheduledCount, shedCount, abandonedCount, lateFireCount, maxLatenessNanos,
-                    expectedHits, drainedCleanly, java.util.Map.of(), java.util.List.of());
+                    expectedHits, drainedCleanly, java.util.Map.of(), java.util.List.of(), 0);
         }
 
         public LoopResult(BucketSeries series, long scheduledCount, long shedCount,
                 long abandonedCount, long lateFireCount, long maxLatenessNanos, long expectedHits,
                 boolean drainedCleanly, java.util.Map<String, Long> errorCounts) {
             this(series, scheduledCount, shedCount, abandonedCount, lateFireCount, maxLatenessNanos,
-                    expectedHits, drainedCleanly, errorCounts, java.util.List.of());
+                    expectedHits, drainedCleanly, errorCounts, java.util.List.of(), 0);
         }
 
         public long executedCount() {
             return series.totalCount();
+        }
+
+        /**
+         * Operations completed per second of <em>wall clock</em>, including the drain after the
+         * measurement window closed.
+         *
+         * <p>Distinct from the rate in the summary table, which divides by the configured
+         * duration. When a target cannot keep up, work queues and finishes during the drain, so
+         * the configured-duration figure approaches the rate that was <em>offered</em> rather than
+         * the one the target achieved. Measured on a server capped at 50/s and offered 200/s for
+         * six seconds: all 1,200 operations completed, which over the configured six seconds reads
+         * as 200/s and over the twenty-four seconds it really took is 50/s. The second number is
+         * the target's.
+         *
+         * <p>Negative when the elapsed time was not recorded.
+         */
+        public double goodputPerSecond() {
+            if (elapsedNanos <= 0) {
+                return -1;
+            }
+            return executedCount() / (elapsedNanos / 1_000_000_000.0);
+        }
+
+        /** True when the drain ran long enough that the summary's rate overstates the target. */
+        public boolean drainDominated(long configuredDurationNanos) {
+            return elapsedNanos > configuredDurationNanos * 1.25;
         }
 
         public boolean fellShort() {
