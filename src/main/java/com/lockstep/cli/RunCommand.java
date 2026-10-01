@@ -102,6 +102,12 @@ public final class RunCommand implements Callable<Integer> {
             + "target would export a trace for every request, and most backends bill per span.")
     boolean trace;
 
+    @Option(names = "--observe-metrics", description =
+            "The TARGET's own metrics endpoint, e.g. http://host/actuator/prometheus. Reports the "
+            + "server's own view of latency — the gap to the caller's is the queue, measured "
+            + "rather than inferred — plus pool saturation, GC pauses and CPU, for any runtime.")
+    String observeMetrics;
+
     @Option(names = "--observe-db", description =
             "Read-only connection to the TARGET's database, so the run can report how many "
             + "queries the target ran per request. Attributable only when this run is the sole "
@@ -150,6 +156,18 @@ public final class RunCommand implements Callable<Integer> {
         com.lockstep.analysis.SelfAudit selfAudit =
                 noSelfAudit ? null : com.lockstep.analysis.SelfAudit.start();
 
+        com.lockstep.runner.MetricsObserver metrics = null;
+        if (observeMetrics != null) {
+            try {
+                metrics = com.lockstep.runner.MetricsObserver.open(observeMetrics);
+                metrics.before();
+                metrics.start();
+            } catch (RuntimeException e) {
+                err.println(Ansi.error(e.getMessage()));
+                return EXIT_CONFIG_ERROR;
+            }
+        }
+
         com.lockstep.runner.db.TargetObserver observer = null;
         com.lockstep.runner.db.BottleneckSampler sampler = null;
         if (observeDb != null) {
@@ -181,6 +199,13 @@ public final class RunCommand implements Callable<Integer> {
         } catch (RuntimeException e) {
             err.println(Ansi.error(e.getMessage() == null ? e.toString() : e.getMessage()));
             return EXIT_RUN_FAILED;
+        }
+
+        com.lockstep.analysis.TargetMetrics targetMetrics = null;
+        if (metrics != null) {
+            try (var closing = metrics) {
+                targetMetrics = closing.after();
+            }
         }
 
         com.lockstep.analysis.Bottleneck bottleneck = null;
@@ -237,6 +262,13 @@ public final class RunCommand implements Callable<Integer> {
             out.println();
             out.print(targetSection);
         }
+        String metricsSection = CliTables.targetMetricsTable(targetMetrics,
+                appMeanNanos(result), result.context().durationNanos());
+        if (!metricsSection.isEmpty()) {
+            out.println();
+            out.print(metricsSection);
+        }
+
         String traceSection = CliTables.slowestRequestsTable(result, trace);
         if (!traceSection.isEmpty()) {
             out.println();
@@ -365,6 +397,18 @@ public final class RunCommand implements Callable<Integer> {
             loop = result.byRunner().get("scenario");
         }
         return loop == null ? 0 : loop.executedCount();
+    }
+
+    /** The caller's observed mean, for comparison against the server's own. */
+    private static long appMeanNanos(RunCoordinator.RunResult result) {
+        var loop = result.byRunner().get("http");
+        if (loop == null) {
+            loop = result.byRunner().get("scenario");
+        }
+        if (loop == null) {
+            return -1;
+        }
+        return loop.series().summarize("app", result.context().durationNanos()).meanNanos();
     }
 
     private static double appDeliveryRatio(RunCoordinator.RunResult result) {

@@ -518,6 +518,82 @@ public final class CliTables {
                 .formatted(Numbers.percent(HistogramRecorder.PERCENTILE_PRECISION)));
     }
 
+    public static String targetMetricsTable(com.lockstep.analysis.TargetMetrics metrics,
+            long clientMeanNanos, long runDurationNanos) {
+        if (metrics == null) {
+            return "";
+        }
+        if (!metrics.available()) {
+            return "target metrics\n" + Ansi.dim("  unavailable — "
+                    + metrics.unavailableReason() + "\n");
+        }
+        if (!metrics.anythingFound()) {
+            return "target metrics\n" + Ansi.dim("  " + metrics.endpoint()
+                    + " exposed no metric this knows how to read\n");
+        }
+
+        StringBuilder out = new StringBuilder("target metrics\n");
+        out.append(Ansi.dim("  " + metrics.endpoint() + " · "
+                + Numbers.withSeparators(metrics.samples()) + " samples\n"));
+
+        long serverMean = metrics.serverMeanNanos();
+        if (serverMean >= 0) {
+            long queueing = metrics.queueingNanos(clientMeanNanos);
+            out.append(("  server's own mean %s against the caller's %s")
+                    .formatted(Numbers.latency(serverMean), Numbers.latency(clientMeanNanos)));
+            if (queueing >= 0) {
+                out.append(" — ").append(Ansi.accent(Numbers.latency(queueing) + " was queueing"))
+                        .append(", which the target's own clock cannot see because it starts when "
+                                + "the work does\n");
+            } else {
+                out.append('\n');
+            }
+        }
+
+        double saturation = metrics.poolSaturation();
+        if (saturation >= 0) {
+            out.append(("  connection pool peaked at %.0f of %.0f (%s)")
+                    .formatted(metrics.poolActiveMax(), metrics.poolMaxConfigured(),
+                            Numbers.percent(saturation)));
+            if (metrics.poolExhausted()) {
+                out.append(" — ").append(Ansi.accent("exhausted"))
+                        .append("; work was waiting for a connection\n");
+            } else {
+                out.append(", mean %.1f\n".formatted(metrics.poolActiveMean()));
+            }
+        }
+
+        long totalGc = metrics.totalGcPauseNanos();
+        if (totalGc >= 0) {
+            double share = metrics.gcShareOfRun(runDurationNanos);
+            out.append(("  target paused %s for garbage collection across %s collections")
+                    .formatted(Numbers.latency(totalGc),
+                            Numbers.withSeparators(metrics.gcPauseCountDelta())));
+            if (share >= 0) {
+                out.append(", %s of the run".formatted(Numbers.percent(share)));
+            }
+            out.append('\n');
+            if (share >= 0.05) {
+                out.append(Ansi.accent("! the target spent "))
+                        .append(Numbers.percent(share))
+                        .append(" of this run collecting garbage — latency attributed to the "
+                                + "database or the network may be this instead\n");
+            }
+        }
+
+        if (metrics.cpuMax() >= 0) {
+            out.append(("  process CPU peaked at %s, mean %s\n").formatted(
+                    Numbers.percent(metrics.cpuMax()), Numbers.percent(metrics.cpuMean())));
+        }
+
+        if (!metrics.metricsNotFound().isEmpty()) {
+            out.append(Ansi.dim("  not exposed: "
+                    + String.join("; ", metrics.metricsNotFound().keySet())
+                    + " — reported as missing rather than as zero\n"));
+        }
+        return out.toString();
+    }
+
     public static String slowestRequestsTable(RunCoordinator.RunResult result, boolean traced) {
         if (result == null) {
             return "";

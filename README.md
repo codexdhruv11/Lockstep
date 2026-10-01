@@ -104,6 +104,12 @@ Three flags do most of the work of not fooling yourself:
 - `--arrivals poisson` — constant pacing understates queueing at the same mean rate, because real
   traffic arrives in clumps.
 
+- `--observe-metrics http://target/actuator/prometheus` reads the target's own metrics, so the
+  report can say how much of the caller's latency was the server *working* and how much was the
+  request *waiting to be worked on*. The gap between the server's mean and the caller's is the
+  queue — and the target's own clock cannot produce that figure, because its clock starts when the
+  work does.
+
 And one that answers a question nothing else here can:
 
 - `--trace` sends a W3C `traceparent` with every request, so an OpenTelemetry-instrumented target
