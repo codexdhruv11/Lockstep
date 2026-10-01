@@ -667,6 +667,43 @@ public final class CliTables {
         return out.toString();
     }
 
+    /** Where a fetched trace's time actually went, divided among the spans that consumed it. */
+    public static String traceBreakdownSection(
+            List<com.lockstep.analysis.TraceBreakdown> breakdowns, String unavailableReason) {
+        if (unavailableReason != null) {
+            return "trace breakdown\n" + Ansi.dim("  " + unavailableReason + "\n");
+        }
+        if (breakdowns == null || breakdowns.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder out = new StringBuilder("trace breakdown\n");
+        for (var breakdown : breakdowns) {
+            out.append("  ").append(breakdown.traceId())
+                    .append(" · ").append(Numbers.latency(breakdown.totalNanos()))
+                    .append(" across ").append(breakdown.spans().size()).append(" spans\n");
+            List<String[]> rows = new ArrayList<>();
+            rows.add(new String[] {"", "SELF", "SHARE", "SPANS", "OPERATION"});
+            for (var contribution : breakdown.top(6)) {
+                double share = breakdown.shareOf(contribution);
+                rows.add(new String[] {
+                    "   ",
+                    Numbers.latency(contribution.selfNanos()),
+                    share < 0 ? "-" : Numbers.percent(share),
+                    String.valueOf(contribution.spanCount()),
+                    contribution.service() == null
+                            ? contribution.name()
+                            : contribution.name() + "  (" + contribution.service() + ")",
+                });
+            }
+            out.append(render(rows));
+        }
+        out.append(Ansi.dim("  self time is each span's duration minus the union of its "
+                + "children's, so the column sums to the trace rather than double-counting "
+                + "parallel work\n"));
+        return out.toString();
+    }
+
     public static String targetMetricsTable(com.lockstep.analysis.TargetMetrics metrics,
             long clientMeanNanos, long runDurationNanos) {
         if (metrics == null) {
@@ -775,8 +812,8 @@ public final class CliTables {
         StringBuilder out = new StringBuilder("slowest requests\n").append(render(rows));
         if (anyTraceId) {
             out.append(Ansi.dim("  look these IDs up in your trace backend to see where inside "
-                    + "the target the time went — this is the only way to tell application time "
-                    + "from serialisation from a query\n"));
+                    + "the target the time went — or pass --traces to have them fetched and "
+                    + "broken down here\n"));
         } else if (!traced) {
             out.append(Ansi.dim("  no trace IDs: run with --trace to send a W3C traceparent, and "
                     + "an OpenTelemetry-instrumented target will link its spans to these "

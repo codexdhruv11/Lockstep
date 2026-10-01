@@ -124,11 +124,24 @@ Three flags do most of the work of not fooling yourself:
 And one that answers a question nothing else here can:
 
 - `--trace` sends a W3C `traceparent` with every request, so an OpenTelemetry-instrumented target
-  ties its own spans to it. The report then prints the trace IDs of the slowest requests, and
-  those show whether the time went to the database, to middleware, or to serialisation — a
-  distinction client-side measurement cannot make in principle. Off by default, because the header
-  is sampled and most trace backends bill per span. See [`otel/README.md`](otel/README.md) for a
-  trace backend in one command and what instrumenting a target costs per language.
+  ties its own spans to it. Add `--traces http://localhost:16686` and the slowest requests' traces
+  are fetched and their time divided among the spans that consumed it:
+
+  ```
+  trace breakdown
+    b285f4b8… · 205ms across 2 spans
+       SELF   SHARE  SPANS  OPERATION
+       183ms  89.3%  1      SELECT signals  (dashboard-svc)
+       22ms   10.7%  1      GET /api/dashboard  (dashboard-svc)
+  ```
+
+  That is the distinction client-side measurement cannot make in principle: whether the time went
+  to a query, to middleware, or to serialisation. Off by default, because the header is sampled
+  and most trace backends bill per span. See [`otel/README.md`](otel/README.md) for a trace
+  backend in one command and what instrumenting a target costs per language.
+
+- `--otlp http://localhost:4318/v1/metrics` sends the run's results to a collector, so a load test
+  lands in the same dashboard as the traffic it is meant to resemble.
 
 ## What it does
 

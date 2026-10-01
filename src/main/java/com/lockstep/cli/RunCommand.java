@@ -102,6 +102,22 @@ public final class RunCommand implements Callable<Integer> {
             + "target would export a trace for every request, and most backends bill per span.")
     boolean trace;
 
+    @Option(names = "--otlp", description =
+            "An OpenTelemetry collector's metrics endpoint, e.g. "
+            + "http://localhost:4318/v1/metrics. The run's results are sent there, so a load "
+            + "test lands in the same dashboard as the traffic it is meant to resemble.")
+    String otlpEndpoint;
+
+    @Option(names = "--otlp-service", description =
+            "service.name for the exported metrics (default: ${DEFAULT-VALUE}).")
+    String otlpService = "lockstep";
+
+    @Option(names = "--traces", description =
+            "A trace backend's base URL, e.g. http://localhost:16686. The slowest requests' "
+            + "traces are fetched and their time broken down here, so an ID does not have to be "
+            + "looked up by hand. Needs --trace. Jaeger's query API only.")
+    String tracesUrl;
+
     @Option(names = "--observe-metrics", description =
             "The TARGET's own metrics endpoint, e.g. http://host/actuator/prometheus. Reports the "
             + "server's own view of latency — the gap to the caller's is the queue, measured "
@@ -274,6 +290,12 @@ public final class RunCommand implements Callable<Integer> {
             out.println();
             out.print(traceSection);
         }
+
+        String breakdown = traceBreakdown(result, out, err);
+        if (!breakdown.isEmpty()) {
+            out.println();
+            out.print(breakdown);
+        }
         String bottleneckSection = CliTables.bottleneckTable(bottleneck);
         if (!bottleneckSection.isEmpty()) {
             out.println();
@@ -383,6 +405,22 @@ public final class RunCommand implements Callable<Integer> {
             out.println();
             out.println("report written to " + reportPath);
         }
+        if (otlpEndpoint != null) {
+            out.println();
+            com.lockstep.runner.OtlpExporter exporter =
+                    com.lockstep.runner.OtlpExporter.open(otlpEndpoint, otlpService);
+            String problem = exporter.export(result);
+            if (problem == null) {
+                out.println("results sent to " + exporter.endpoint() + " as "
+                        + (com.lockstep.runner.OtlpExporter.metricsPerRunner()
+                                * result.byRunner().size())
+                        + " metrics");
+            } else {
+                err.println(Ansi.error("could not send results to " + exporter.endpoint()
+                        + ": " + problem));
+            }
+        }
+
         out.println();
         out.println(CliTables.precisionNote());
         out.flush();
@@ -397,6 +435,60 @@ public final class RunCommand implements Callable<Integer> {
             loop = result.byRunner().get("scenario");
         }
         return loop == null ? 0 : loop.executedCount();
+    }
+
+    /**
+     * Fetches the slowest requests' traces and breaks them down, when a backend was given.
+     *
+     * <p>Only a few are fetched. Each is an HTTP round trip with retries for ingest lag, and the
+     * second-slowest request rarely tells a different story from the slowest.
+     */
+    private String traceBreakdown(RunCoordinator.RunResult result, PrintWriter out,
+            PrintWriter err) {
+        if (tracesUrl == null) {
+            return "";
+        }
+        if (!trace) {
+            return CliTables.traceBreakdownSection(null,
+                    "--traces needs --trace: without it no trace IDs are sent, so there is "
+                    + "nothing to fetch");
+        }
+
+        List<String> ids = new java.util.ArrayList<>();
+        for (var entry : result.byRunner().values()) {
+            for (var slow : entry.slowestRequests()) {
+                if (slow.traceId() != null && ids.size() < 3 && !ids.contains(slow.traceId())) {
+                    ids.add(slow.traceId());
+                }
+            }
+        }
+        if (ids.isEmpty()) {
+            return CliTables.traceBreakdownSection(null, "no trace IDs were recorded to fetch");
+        }
+
+        err.println(com.lockstep.util.Ansi.dim(
+                "fetching " + ids.size() + " trace(s) from " + tracesUrl + "..."));
+        err.flush();
+
+        List<com.lockstep.analysis.TraceBreakdown> breakdowns = new java.util.ArrayList<>();
+        try (var fetcher = com.lockstep.runner.TraceFetcher.open(tracesUrl)) {
+            for (String id : ids) {
+                var fetched = fetcher.fetch(id);
+                if (fetched != null && !fetched.isEmpty()) {
+                    breakdowns.add(fetched);
+                }
+            }
+        } catch (RuntimeException e) {
+            return CliTables.traceBreakdownSection(null,
+                    "could not read " + tracesUrl + ": " + e.getMessage());
+        }
+        if (breakdowns.isEmpty()) {
+            return CliTables.traceBreakdownSection(null,
+                    "no spans came back for those IDs. Either the target is not instrumented, its "
+                    + "exporter is not pointed at this backend, or it supports "
+                    + com.lockstep.runner.TraceFetcher.describeSupport());
+        }
+        return CliTables.traceBreakdownSection(breakdowns, null);
     }
 
     /** The caller's observed mean, for comparison against the server's own. */
